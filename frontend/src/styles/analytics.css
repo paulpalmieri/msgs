@@ -1,0 +1,234 @@
+/* ==========================================
+   ANALYTICS STYLES
+   Homepage components: stat tiles, sections, buttons
+   ========================================== */
+
+/* ==========================================
+   STAT TILES - Main dashboard statistics
+   ========================================== */
+
+.stat-tile {
+  position: relative;
+  padding: 0;
+  background: transparent;
+  overflow: visible;
+  text-align: left;
+}
+
+.stat-tile:hover .stat-value {
+  color: var(--accent-primary);
+}
+
+.stat-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.6875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  color: var(--text-muted);
+  margin-bottom: 0.25rem;
+  font-weight: 500;
+  line-height: 1;
+}
+
+.stat-value {
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: clamp(2.5rem, 8vw, 4.5rem);
+  font-weight: 700;
+  line-height: 0.95;
+  letter-spacing: -0.02em;
+  color: var(--text-primary);
+}
+
+.stat-subtext {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.625rem;
+  color: var(--text-muted);
+  margin-top: 0.25rem;
+  letter-spacing: 0.08em;
+  font-weight: 400;
+  text-transform: uppercase;
+}
+
+/* Hero stat - largest number on page */
+.stat-tile-hero .stat-value {
+  font-size: clamp(3.5rem, 12vw, 9rem);
+  font-weight: 700;
+  line-height: 0.9;
+  letter-spacing: -0.03em;
+}
+
+.stat-tile-hero .stat-label {
+  font-size: 0.75rem;
+  letter-spacing: 0.2em;
+  margin-bottom: 0.5rem;
+}
+
+/* Secondary stat */
+.stat-tile-secondary .stat-value {
+  font-size: clamp(1.5rem, 4vw, 2.5rem);
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -0.01em;
+}
+
+.stat-tile-secondary .stat-label {
+  font-size: 0.5625rem;
+  letter-spacing: 0.12em;
+}
+
+/* ==========================================
+   SECTION DIVIDERS - Typographic hierarchy
+   ========================================== */
+
+.section-divider {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: 0;
+  margin-bottom: 32px;
+  padding-top: 48px;
+}
+
+.section-divider-first {
+  padding-top: 0;
+}
+
+.section-divider-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.5625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.25em;
+  color: var(--text-muted);
+  margin-bottom: 0.375rem;
+  line-height: 1;
+  font-weight: 500;
+  opacity: 0.6;
+}
+
+.section-divider-title {
+  font-family: 'Bebas Neue', 'Space Grotesk', sans-serif;
+  font-size: clamp(2rem, 5vw, 3rem);
+  font-weight: 400;
+  letter-spacing: 0.02em;
+  color: var(--text-primary);
+  line-height: 0.9;
+  text-transform: uppercase;
+}
+
+/* ==========================================
+   BUTTONS
+   ========================================== */
+
+.btn-brutal-filled {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  padding: 0.625rem 1.25rem;
+  background: var(--accent-primary);
+  color: white;
+  cursor: pointer;
+}
+
+.btn-brutal-filled:hover {
+  background: var(--text-primary);
+}
+
+/* Wrapped nav button shimmer */
+.wrapped-nav-btn {
+  position: relative;
+  overflow: hidden;
+}
+
+.wrapped-nav-btn::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 50%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.15) 50%, transparent 100%);
+  animation: shimmer 2.5s ease-in-out infinite;
+  animation-delay: 1s;
+}
+
+@keyframes shimmer {
+  0% { left: -100%; }
+  40%, 100% { left: 150%; }
+}
+
+/* ==========================================
+   LOADING OVERLAY
+   ========================================== */
+
+/* Loading text fill animation */
+.lore-progress-text {
+  font-family: 'Bebas Neue', 'Space Grotesk', Impact, sans-serif;
+  font-size: clamp(4rem, 15vw, 8rem);
+  font-weight: 400;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  background: linear-gradient(
+    to right,
+    var(--accent-primary) 0%,
+    var(--accent-primary) var(--progress, 0%),
+    #E5E5E5 var(--progress, 0%),
+    #E5E5E5 100%
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  transition: background 0.15s ease-out;
+  user-select: none;
+}
+
+/* ==========================================
+   RESPONSIVE TYPOGRAPHY
+   ========================================== */
+
+@media (max-width: 768px) {
+  .stat-value {
+    font-size: clamp(2rem, 12vw, 3rem);
+  }
+  
+  .stat-tile-hero .stat-value {
+    font-size: clamp(2.5rem, 14vw, 4.5rem);
+  }
+  
+  .stat-tile-secondary .stat-value {
+    font-size: clamp(1.25rem, 6vw, 1.75rem);
+  }
+  
+  .section-divider-title {
+    font-size: clamp(1.5rem, 6vw, 2rem);
+  }
+}
+
+@media (max-width: 480px) {
+  .stat-value {
+    font-size: clamp(1.75rem, 10vw, 2.5rem);
+  }
+  
+  .stat-tile-hero .stat-value {
+    font-size: clamp(2rem, 13vw, 3.5rem);
+  }
+  
+  .section-divider-title {
+    font-size: clamp(1.25rem, 5vw, 1.75rem);
+  }
+}
+
+@media (min-width: 1280px) {
+  .stat-tile-hero .stat-value {
+    font-size: 9rem;
+    letter-spacing: -0.04em;
+  }
+  
+  .stat-tile-secondary .stat-value {
+    font-size: 2.75rem;
+  }
+}
+
+

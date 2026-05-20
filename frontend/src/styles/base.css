@@ -1,0 +1,266 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ==========================================
+   BASE STYLES
+   Design tokens are in src/tokens.js
+   Tailwind config imports from tokens.js
+   ========================================== */
+
+:root {
+  /* Typography base */
+  font-family: 'Space Grotesk', system-ui, sans-serif;
+  line-height: 1.4;
+  font-weight: 400;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  
+  /* CSS vars needed for Recharts overrides */
+  --accent-primary: #D95218;
+  --text-primary: #0A0A0A;
+  --text-muted: #A3A3A3;
+  --bg-primary: #FAFAFA;
+  --bg-elevated: #FFFFFF;
+  
+  color-scheme: light;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+}
+
+/* ==========================================
+   GLOBAL RESET - Swiss Brutalist (no rounded corners)
+   ========================================== */
+
+*, *::before, *::after {
+  border-radius: 0 !important;
+}
+
+button, a, input, select, textarea {
+  transition: background-color 0.1s ease, color 0.1s ease;
+  border: none;
+  outline: none;
+}
+
+button:focus, a:focus, input:focus, select:focus {
+  outline: none;
+  box-shadow: none;
+}
+
+/* Emoji rendering */
+.emoji, [data-emoji], .emoji-apple {
+  font-family: 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', 'Twemoji Mozilla', sans-serif;
+  font-style: normal;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ==========================================
+   SCROLLBARS
+   ========================================== */
+
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(0,0,0,0.1);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+/* ==========================================
+   ANIMATIONS
+   ========================================== */
+
+@keyframes fade-in-up {
+  0% { opacity: 0; transform: translateY(12px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes fade-in {
+  0% { opacity: 0; }
+  100% { opacity: 1; }
+}
+
+@keyframes scale-in {
+  0% { opacity: 0; transform: scale(0.98); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+@keyframes slide-up {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pulse-scale {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.05); }
+}
+
+.animate-fade-in-up {
+  animation: fade-in-up 0.3s ease-out forwards;
+}
+
+.animate-fade-in {
+  animation: fade-in 0.3s ease-out forwards;
+}
+
+.animate-scale-in {
+  animation: scale-in 0.2s ease-out forwards;
+}
+
+.animate-slide-up {
+  animation: slide-up 0.4s ease-out forwards;
+}
+
+.animate-pulse-scale {
+  animation: pulse-scale 2s ease-in-out infinite;
+}
+
+/* Staggered delays */
+.delay-100 { animation-delay: 50ms; }
+.delay-200 { animation-delay: 100ms; }
+.delay-300 { animation-delay: 150ms; }
+.delay-400 { animation-delay: 200ms; }
+.delay-500 { animation-delay: 250ms; }
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.animate-spin {
+  animation: spin 1s linear infinite;
+}
+
+/* ==========================================
+   MSGS LOADING TEXT - Progress fill effect
+   ========================================== */
+
+.lore-progress-text {
+  font-family: 'Bebas Neue', 'Space Grotesk', Impact, sans-serif;
+  font-size: 5rem;
+  font-weight: 400;
+  letter-spacing: 0.1em;
+  line-height: 1;
+  user-select: none;
+  
+  /* Gradient fill based on progress */
+  background: linear-gradient(
+    to right,
+    #0A0A0A var(--progress, 0%),
+    rgba(10, 10, 10, 0.15) var(--progress, 0%)
+  );
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  
+  transition: background 0.3s ease-out;
+}
+
+/* ==========================================
+   RECHARTS OVERRIDES
+   ========================================== */
+
+.recharts-legend-item-text {
+  font-family: 'JetBrains Mono', monospace !important;
+  font-size: 12px !important;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted) !important;
+}
+
+.recharts-legend-icon {
+  border-radius: 0 !important;
+}
+
+.recharts-surface .recharts-legend-icon {
+  rx: 0 !important;
+  ry: 0 !important;
+}
+
+.recharts-legend-wrapper rect,
+.recharts-legend-wrapper circle {
+  rx: 0 !important;
+  ry: 0 !important;
+}
+
+.recharts-legend-wrapper {
+  padding-top: 1rem !important;
+}
+
+.recharts-legend-item {
+  margin-right: 1.5rem !important;
+}
+
+.recharts-legend-item svg {
+  width: 8px !important;
+  height: 8px !important;
+}
+
+.recharts-tooltip-wrapper {
+  outline: none !important;
+}
+
+.recharts-default-tooltip {
+  border-radius: 0 !important;
+  border: none !important;
+  background: var(--bg-elevated) !important;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12) !important;
+  padding: 12px 16px !important;
+}
+
+.recharts-cartesian-axis-line {
+  stroke: rgba(0, 0, 0, 0.08) !important;
+  stroke-width: 1 !important;
+}
+
+.recharts-cartesian-grid-horizontal line,
+.recharts-cartesian-grid-vertical line {
+  stroke: transparent !important;
+}
+
+/* ==========================================
+   CONTENT FILTER BAR
+   ========================================== */
+
+.content-filter-bar {
+  position: sticky;
+  top: 64px;
+  z-index: 35;
+  background: linear-gradient(to bottom, #FAFAFA 0%, #FAFAFA 80%, transparent 100%);
+  padding-top: 4px;
+  padding-bottom: 12px;
+  margin-left: -4px;
+}
+
+/* ==========================================
+   UTILITIES
+   ========================================== */
+
+/* Tabular numbers */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+

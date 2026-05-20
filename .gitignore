@@ -1,0 +1,21 @@
+# System
+.DS_Store
+.env
+
+# Claude Code
+.claude/
+
+# Python
+venv/
+__pycache__/
+*.pyc
+
+# Node
+node_modules/
+frontend/node_modules/
+frontend/dist/
+
+# Raw data (don't commit your private messages!)
+/data/
+
+# Keep frontend/public/chat_data.json for static site deployment
