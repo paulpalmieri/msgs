@@ -6,6 +6,7 @@ import { Header, FilterBar, MenuDrawer } from './components/layout';
 
 // Feature pages
 import { AnalyticsPage, WrappedFeature, ContentPage } from './features';
+import StoryPage from './features/story/StoryPage';
 
 // Common components
 import { LoadingOverlay, UpdatingOverlay } from './components/LoadingOverlay';
@@ -314,11 +315,24 @@ function App() {
     const handleAnalyticsClick = useCallback(() => {
         setActiveView('analytics');
         setShowMenuDrawer(false);
+        window.history.pushState({}, '', '/');
     }, []);
 
     const handleContentClick = useCallback(() => {
         setActiveView('content');
         setShowMenuDrawer(false);
+        window.history.pushState({}, '', '/');
+    }, []);
+
+    const handleStoryClick = useCallback(() => {
+        setActiveView('story');
+        setShowMenuDrawer(false);
+        window.history.pushState({}, '', '/story');
+    }, []);
+
+    const handleStoryBack = useCallback(() => {
+        setActiveView('analytics');
+        window.history.pushState({}, '', '/');
     }, []);
 
     // Data info for menu drawer
@@ -358,6 +372,18 @@ function App() {
                     groupTitle={wrappedConfig.groupTitle}
                 />
             </div>
+        );
+    }
+
+    // Story View — full screen narrative experience
+    if (activeView === 'story' && processedData) {
+        return (
+            <StoryPage
+                aggregates={filteredAggregates || aggregates}
+                processedData={processedData}
+                conversationTitle={isDemo ? DEMO_CONVERSATION.title : activeConversation?.title}
+                onBack={handleStoryBack}
+            />
         );
     }
 
@@ -468,6 +494,7 @@ function App() {
                 activeView={activeView}
                 onAnalyticsClick={handleAnalyticsClick}
                 onContentClick={handleContentClick}
+                onStoryClick={handleStoryClick}
             />
 
             {/* Header */}

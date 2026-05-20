@@ -29,6 +29,7 @@ export default function MenuDrawer({
     activeView = 'analytics',
     onAnalyticsClick,
     onContentClick,
+    onStoryClick,
 }) {
     const [deleteConfirm, setDeleteConfirm] = useState(false);
     
@@ -132,6 +133,20 @@ export default function MenuDrawer({
 
                     {/* Divider - Mobile only */}
                     <div className="md:hidden border-t border-neutral-200" />
+
+                    {/* Story Button */}
+                    {onStoryClick && (
+                        <button
+                            onClick={() => { onClose?.(); onStoryClick(); }}
+                            className={`w-full flex items-center justify-center h-12 font-mono text-[12px] uppercase tracking-widest transition-colors ${
+                                activeView === 'story'
+                                    ? 'bg-neutral-900 text-white'
+                                    : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'
+                            }`}
+                        >
+                            Story
+                        </button>
+                    )}
 
                     {/* Wrapped Button - Matches navbar style */}
                     <button
