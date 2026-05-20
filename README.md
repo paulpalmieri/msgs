@@ -50,7 +50,7 @@ Same flow via [Instagram → Settings → Your activity → Download your inform
 
 The app is a static SPA. It deploys to Vercel with zero config:
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/YOUR_USERNAME/msgs&root-directory=frontend)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/paulpalmieri/msgs&root-directory=frontend)
 
 `frontend/vercel.json` is already configured for client-side routing.
 
