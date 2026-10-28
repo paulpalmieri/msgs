@@ -4,8 +4,9 @@ import { Download } from 'lucide-react';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { fmtInt } from '../../lib/format';
 import { hourLabel } from '../../lib/time';
+import { Thumb } from '../../media/Thumb';
 import { Badge } from '../../ui/Badge';
-import { chronotype, type GroupWrapped, type WrappedData } from './data';
+import { chronotype, type GroupWrapped, type Photo, type WrappedData } from './data';
 import type { Slide } from './StoryPlayer';
 import { Clock, Orbit, Podium, ShareRing, Squares } from './visuals';
 
@@ -47,7 +48,15 @@ function Big({ children, className = '' }: { children: ReactNode; className?: st
   return <div className={`wr-hero wr-scale wr-d1 break-words ${className}`}>{children}</div>;
 }
 
-function Quote({ text, kind }: { text: string | null; kind: string }) {
+function Quote({ text, kind, uri, media }: { text: string | null; kind: string; uri?: string | null; media: boolean }) {
+  if (uri && media) {
+    return (
+      <div className="wr-scale wr-d1">
+        <Thumb uri={uri} type="photo" fit="contain" className="max-h-[46vh] w-full bg-transparent" />
+        {text && <div className="mt-4 text-[18px] font-medium leading-snug">“{text.slice(0, 140)}”</div>}
+      </div>
+    );
+  }
   if (!text) {
     return (
       <div className="wr-scale wr-d1">
@@ -67,7 +76,21 @@ function SquaresSlide({ label, days, year, footer }: { label: string; days: { d:
   );
 }
 
-type Actions = { onReplay: () => void; onClose: () => void };
+type Actions = { onReplay: () => void; onClose: () => void; mediaReady: boolean };
+
+/** Nine most reacted photos as a collage. */
+function Collage({ photos }: { photos: Photo[] }) {
+  return (
+    <div className="grid grid-cols-3 gap-1.5">
+      {photos.slice(0, 9).map((p, i) => (
+        <div key={p.uri} className="wr-scale relative aspect-square" style={{ animationDelay: `${0.1 + i * 0.08}s` }}>
+          <Thumb uri={p.uri} type={p.type} className="h-full w-full" />
+          {p.n > 0 && <span className="absolute bottom-1 right-1 rounded bg-black/60 px-1 text-[10px] font-semibold text-white">♥ {p.n}</span>}
+        </div>
+      ))}
+    </div>
+  );
+}
 
 // --- Personal story -------------------------------------------------------------------
 
@@ -214,8 +237,17 @@ export function buildPersonSlides(d: WrappedData, a: Actions): Slide[] {
       seconds: 7,
       render: () => (
         <Frame label="Your most loved message" footer={<>{shortDate.format(new Date(d.bestMessage!.ts))} · {fmtInt(d.bestMessage!.n)} reactions</>}>
-          <Quote text={d.bestMessage!.text} kind={d.bestMessage!.kind} />
+          <Quote text={d.bestMessage!.text} kind={d.bestMessage!.kind} uri={d.bestMessage!.uri} media={a.mediaReady} />
           <div className="wr-up wr-d3 mt-6 text-[34px] leading-none">{[...new Set(d.bestMessage!.emojis)].slice(0, 8).join(' ')}</div>
+        </Frame>
+      ),
+    },
+    a.mediaReady && d.photos.length >= 3 && {
+      id: 'photos',
+      seconds: 8,
+      render: () => (
+        <Frame label={d.year ? `Your ${d.year} in pictures` : 'Your pictures'} footer={<>{fmtInt(d.photoCount)} photos shared. These got the most love.</>}>
+          <Collage photos={d.photos} />
         </Frame>
       ),
     },
@@ -381,8 +413,17 @@ export function buildGroupSlides(g: GroupWrapped, a: Actions): Slide[] {
       render: () => (
         <Frame label="The message of the year" footer={<>{first(g.bestMessage!.sender)} · {shortDate.format(new Date(g.bestMessage!.ts))} · {fmtInt(g.bestMessage!.n)} reactions</>}>
           <div className="wr-fade mb-5"><Badge name={g.bestMessage!.sender} size={40} /></div>
-          <Quote text={g.bestMessage!.text} kind={g.bestMessage!.kind} />
+          <Quote text={g.bestMessage!.text} kind={g.bestMessage!.kind} uri={g.bestMessage!.uri} media={a.mediaReady} />
           <div className="wr-up wr-d3 mt-6 text-[34px] leading-none">{[...new Set(g.bestMessage!.emojis)].slice(0, 8).join(' ')}</div>
+        </Frame>
+      ),
+    },
+    a.mediaReady && g.photos.length >= 3 && {
+      id: 'photos',
+      seconds: 8,
+      render: () => (
+        <Frame label={g.year ? `The group’s ${g.year} in pictures` : 'The group’s pictures'} footer={<>{fmtInt(g.photoCount)} photos shared. These got the most love.</>}>
+          <Collage photos={g.photos} />
         </Frame>
       ),
     },
@@ -464,7 +505,7 @@ export function buildGroupSlides(g: GroupWrapped, a: Actions): Slide[] {
 
 // --- Share card ---------------------------------------------------------------------------
 
-function CardSlide({ heading, period, conversation, stats, file, onReplay, onClose }: Actions & {
+function CardSlide({ heading, period, conversation, stats, file, onReplay, onClose }: Omit<Actions, 'mediaReady'> & {
   heading: ReactNode; period: string; conversation: string; stats: [string, string][]; file: string;
 }) {
   const card = useRef<HTMLDivElement>(null);

@@ -8,6 +8,7 @@ import { lit } from '../db/duckdb';
 import { useQuery } from '../db/useQuery';
 import { fmtInt } from '../lib/format';
 import { hourLabel } from '../lib/time';
+import { useMedia } from '../media/MediaProvider';
 import { Badge } from '../ui/Badge';
 import { Panel, Segmented, Stat } from '../ui/primitives';
 import { chronotype, loadGroupWrapped, loadWrapped, type GroupWrapped, type WrappedData } from './wrapped/data';
@@ -100,11 +101,12 @@ export function Wrapped() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, person, effectiveYear, epoch, conv]);
 
-  const actions = { onReplay: () => setPlaying((n) => n + 1), onClose: () => setPlaying(0) };
+  const media = useMedia();
+  const actions = { onReplay: () => setPlaying((n) => n + 1), onClose: () => setPlaying(0), mediaReady: media.status === 'ready' };
   const slides = useMemo(
     () => (!data ? [] : data.mode === 'group' ? buildGroupSlides(data, actions) : buildPersonSlides(data, actions)),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [data],
+    [data, media.status],
   );
   const slot = conv.people.find((p) => p.name === person)?.slot ?? 0;
   const accent = mode === 'group' ? BRAND : DARK_PEOPLE[slot % DARK_PEOPLE.length];

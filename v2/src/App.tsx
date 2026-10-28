@@ -3,6 +3,7 @@ import { useRoute } from './app/router';
 import { ConversationPage } from './pages/ConversationPage';
 import { ImportPage } from './pages/ImportPage';
 import { PickerPage } from './pages/PickerPage';
+import { MediaProvider } from './media/MediaProvider';
 
 function Root() {
   const { state } = useData();
@@ -16,7 +17,9 @@ function Root() {
 export function App() {
   return (
     <DataProvider>
-      <Root />
+      <MediaProvider>
+        <Root />
+      </MediaProvider>
     </DataProvider>
   );
 }

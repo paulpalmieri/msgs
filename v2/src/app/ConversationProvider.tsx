@@ -7,9 +7,10 @@
 //                  timelines use it so the brushed range keeps its context)
 //   sel            ctx + date range: the current selection
 //   sel_reactions  reactions on messages in sel, with receiver + reactor
-//   span           conv + date range only. Turn-taking (who replies to whom)
-//                  needs every message in order, so people / type filters
-//                  are applied to its results instead of its rows.
+//   span           conv + date range + content types. Turn-taking (who
+//                  replies to whom) needs every person's messages in order,
+//                  so the people filter is applied to its results instead
+//                  (keeping anything that involves a selected person).
 //   span_reactions reactions on messages in span
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useChartTheme } from '../charts/theme';
@@ -75,9 +76,13 @@ let viewQueue: Promise<void> = Promise.resolve();
 export function filterSql(f: Filters, withDates: boolean): string {
   const parts = ['TRUE'];
   if (f.people.length) parts.push(`sender IN (${f.people.map(lit).join(', ')})`);
-  if (f.kinds.length) parts.push(`kind IN (${f.kinds.flatMap((k) => KIND_GROUPS[k]).map(lit).join(', ')})`);
+  parts.push(kindsSql(f));
   if (withDates) parts.push(dateSql(f));
   return parts.join(' AND ');
+}
+
+export function kindsSql(f: Filters): string {
+  return f.kinds.length ? `kind IN (${f.kinds.flatMap((k) => KIND_GROUPS[k]).map(lit).join(', ')})` : 'TRUE';
 }
 
 export function dateSql(f: Filters): string {
@@ -161,7 +166,7 @@ export function ConversationProvider({ threadId, filters, setFilters, children, 
       await conn.query(`CREATE OR REPLACE TEMP VIEW sel_reactions AS
         SELECT r.message_id, r.actor, r.reaction, m.sender AS receiver, m.ts AS message_ts
         FROM reactions r JOIN sel m USING (message_id)`);
-      await conn.query(`CREATE OR REPLACE TEMP VIEW span AS SELECT * FROM conv WHERE ${dateSql(filters)}`);
+      await conn.query(`CREATE OR REPLACE TEMP VIEW span AS SELECT * FROM conv WHERE ${dateSql(filters)} AND ${kindsSql(filters)}`);
       await conn.query(`CREATE OR REPLACE TEMP VIEW span_reactions AS
         SELECT r.message_id, r.actor, r.reaction, m.sender AS receiver, m.ts AS message_ts
         FROM reactions r JOIN span m USING (message_id)`);

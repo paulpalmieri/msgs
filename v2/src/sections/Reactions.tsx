@@ -12,6 +12,7 @@ import { useQuery } from '../db/useQuery';
 import { fmtDate, fmtInt, fmtPct } from '../lib/format';
 import { tsLit } from '../lib/time';
 import { Panel, Stat } from '../ui/primitives';
+import { MessagePreview } from '../media/MessagePreview';
 import { Badge } from '../ui/Badge';
 
 function useWhere() {
@@ -219,9 +220,10 @@ function MostReacted() {
   const [emoji, setEmoji] = useState<string | null>(null);
   const chips = useQuery<{ reaction: string }>(`SELECT reaction FROM span_reactions WHERE ${where} GROUP BY 1 ORDER BY count(*) DESC LIMIT 8`).data ?? [];
   const authors = filters.people.length ? `m.sender IN (${filters.people.map(lit).join(', ')})` : 'TRUE';
-  const q = useQuery<{ message_id: number; ts: number; sender: string; text: string | null; kind: string; n: number; emojis: string }>(`
+  const q = useQuery<{ message_id: number; ts: number; sender: string; text: string | null; kind: string; n: number; emojis: string; atts: string | null }>(`
     SELECT m.message_id, epoch_ms(m.ts) AS ts, m.sender, m.text, m.kind,
-           count(*) ${emoji ? `FILTER (r.reaction = ${lit(emoji)})` : ''} AS n, string_agg(r.reaction, '') AS emojis
+           count(*) ${emoji ? `FILTER (r.reaction = ${lit(emoji)})` : ''} AS n, string_agg(r.reaction, '') AS emojis,
+           (SELECT to_json(list({'t': type, 'u': uri} ORDER BY uri))::VARCHAR FROM attachments a WHERE a.message_id = m.message_id) AS atts
     FROM span m JOIN reactions r USING (message_id)
     WHERE ${authors} GROUP BY 1, 2, 3, 4, 5 HAVING n > 0 ORDER BY n DESC, ts DESC LIMIT 30`);
   return (
@@ -248,7 +250,7 @@ function MostReacted() {
               <Badge name={m.sender} />
               <span className="truncate">{m.sender}</span>
             </span>
-            <span className={`min-w-0 flex-1 ${m.text ? '' : 'italic text-ink-3'}`}>{m.text ?? m.kind}</span>
+            <MessagePreview text={m.text} kind={m.kind} atts={m.atts} />
             <span className="shrink-0 text-[13px]">{[...new Set(m.emojis)].slice(0, 6).join('')}</span>
             <span className="num w-24 shrink-0 text-right text-[11px] text-ink-3">{fmtDate(m.ts)}</span>
           </button>

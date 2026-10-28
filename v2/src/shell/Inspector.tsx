@@ -3,6 +3,7 @@ import { BookOpen, X } from 'lucide-react';
 import { useEffect } from 'react';
 import { useConversation } from '../app/ConversationProvider';
 import { useQuery } from '../db/useQuery';
+import { AttachmentStrip } from '../media/AttachmentStrip';
 import { fmtInt } from '../lib/format';
 
 const LIMIT = 500;
@@ -18,12 +19,14 @@ interface MsgRow extends Record<string, unknown> {
   n_attachments: number;
   call_duration: number | null;
   reactions: string | null;
+  attachments: string | null;
 }
 
 export function messagesSql(where: string, from: 'sel' | 'ctx' | 'span' = 'sel', limit = LIMIT) {
   return `
     SELECT m.message_id, epoch_ms(m.ts) AS ts, m.sender, m.kind, m.text, m.link, m.n_attachments, m.call_duration,
-           (SELECT string_agg(reaction, '') FROM reactions r WHERE r.message_id = m.message_id) AS reactions
+           (SELECT string_agg(reaction, '') FROM reactions r WHERE r.message_id = m.message_id) AS reactions,
+           (SELECT to_json(list({'t': type, 'u': uri} ORDER BY uri))::VARCHAR FROM attachments a WHERE a.message_id = m.message_id) AS attachments
     FROM ${from} m WHERE ${where} ORDER BY m.ts LIMIT ${limit}`;
 }
 
@@ -44,7 +47,8 @@ export function MessageRow({ m, onOpen }: { m: MsgRow; onOpen?: (messageId: numb
         )}
         <span className="num ml-auto text-ink-3">{tf.format(new Date(m.ts))}</span>
       </div>
-      <div className={`mt-0.5 whitespace-pre-wrap break-words pl-2.5 ${m.text ? '' : 'italic text-ink-3'}`}>{body}</div>
+      {(m.text || !m.attachments) && <div className={`mt-0.5 whitespace-pre-wrap break-words pl-2.5 ${m.text ? '' : 'italic text-ink-3'}`}>{body}</div>}
+      {m.attachments && <div className="pl-2.5"><AttachmentStrip message={m} attachments={JSON.parse(m.attachments)} size={84} max={4} /></div>}
       {m.reactions && <div className="mt-0.5 pl-2.5 text-[12px]">{m.reactions}</div>}
     </div>
   );

@@ -33,16 +33,29 @@ function autoGrain(spanDays: number): Grain {
   return 'month';
 }
 
-/** Dense bucket starts over the whole conversation, plus counts per series. */
-function useSeriesByBucket(grain: Grain) {
+/** The selected date range, clamped to the conversation (epoch ms of wall-clock days). */
+export function useSelectedRange(): [number, number] {
+  const { conv, filters } = useConversation();
+  const from = filters.from ? Math.max(conv.firstTs, Date.parse(filters.from)) : conv.firstTs;
+  const to = filters.to ? Math.min(conv.lastTs, Date.parse(filters.to) + DAY - 1) : conv.lastTs;
+  return [from, Math.max(from, to)];
+}
+
+/**
+ * Dense bucket starts plus counts per series. `ctx` spans the whole
+ * conversation (the timeline you brush on); `sel` only the selected range.
+ */
+function useSeriesByBucket(grain: Grain, source: 'ctx' | 'sel') {
   const { seriesSql } = useConversation();
+  const [from, to] = useSelectedRange();
+  const bounds = source === 'ctx' ? ['(SELECT min(ts) FROM conv)', '(SELECT max(ts) FROM conv)'] : [`TIMESTAMP '${utc(from)}'`, `TIMESTAMP '${utc(to)}'`];
   const buckets = useQuery<{ b: number }>(`
     SELECT epoch_ms(range) AS b FROM range(
-      date_trunc('${grain}', (SELECT min(ts) FROM conv)),
-      (SELECT max(ts) FROM conv) + INTERVAL ${STEP[grain]},
+      date_trunc('${grain}', ${bounds[0]}),
+      ${bounds[1]} + INTERVAL ${STEP[grain]},
       INTERVAL ${STEP[grain]})`);
   const counts = useQuery<{ b: number; s: string; n: number }>(`
-    SELECT epoch_ms(date_trunc('${grain}', ts)) AS b, ${seriesSql} AS s, count(*) AS n FROM ctx GROUP BY 1, 2`);
+    SELECT epoch_ms(date_trunc('${grain}', ts)) AS b, ${seriesSql} AS s, count(*) AS n FROM ${source} GROUP BY 1, 2`);
   return useMemo(() => {
     if (!buckets.data || !counts.data) return null;
     const index = new Map(buckets.data.map((r, i) => [r.b, i]));
@@ -95,7 +108,7 @@ function Timeline() {
   const t = useChartTheme();
   const { conv, filters, setFilters, seriesNames, colorOf, inspect } = useConversation();
   const [grain, setGrain] = useState<Grain>(() => autoGrain((conv.lastTs - conv.firstTs) / DAY));
-  const data = useSeriesByBucket(grain);
+  const data = useSeriesByBucket(grain, 'ctx');
 
   const option = useMemo(() => {
     if (!data) return null;
@@ -176,7 +189,7 @@ function Timeline() {
       title="Messages over time"
       actions={
         <div className="flex items-center gap-3">
-          <span className="text-[11px] text-ink-3">Drag to filter dates · click a period to read · pinch or ⌃-scroll to zoom</span>
+          <span className="text-[11px] text-ink-3">{filters.from || filters.to ? 'Whole history, selection shaded' : 'Drag to filter dates'} · click a period to read · pinch or ⌃-scroll to zoom</span>
           <Segmented value={grain} options={GRAINS.map((g) => [g, g[0].toUpperCase() + g.slice(1)] as [Grain, string])} onChange={setGrain} />
         </div>
       }
@@ -267,9 +280,12 @@ function ShareOfVoice() {
 
 function ShareOverTime() {
   const t = useChartTheme();
-  const { conv, seriesNames, colorOf } = useConversation();
-  const grain: Grain = (conv.lastTs - conv.firstTs) / DAY > 6 * 365 ? 'quarter' : 'month';
-  const data = useSeriesByBucket(grain);
+  const { seriesNames, colorOf } = useConversation();
+  const [from, to] = useSelectedRange();
+  const days = (to - from) / DAY;
+  // Coarse enough that each period has a meaningful split, fine enough to show change.
+  const grain: Grain = days <= 45 ? 'day' : days <= 400 ? 'week' : days <= 6 * 365 ? 'month' : 'quarter';
+  const data = useSeriesByBucket(grain, 'sel');
 
   const option = useMemo(() => {
     if (!data) return null;
@@ -318,10 +334,11 @@ function ShareOverTime() {
 
 function PersonYearHeatmap() {
   const t = useChartTheme();
-  const { conv, seriesSql, seriesNames, seriesWhere, inspect, colorOf } = useConversation();
-  const q = useQuery<{ s: string; y: number; n: number }>(`SELECT ${seriesSql} AS s, year(ts) AS y, count(*) AS n FROM ctx GROUP BY 1, 2`);
-  const y0 = new Date(conv.firstTs).getUTCFullYear();
-  const y1 = new Date(conv.lastTs).getUTCFullYear();
+  const { seriesSql, seriesNames, seriesWhere, inspect, colorOf } = useConversation();
+  const [from, to] = useSelectedRange();
+  const q = useQuery<{ s: string; y: number; n: number }>(`SELECT ${seriesSql} AS s, year(ts) AS y, count(*) AS n FROM sel GROUP BY 1, 2`);
+  const y0 = new Date(from).getUTCFullYear();
+  const y1 = new Date(to).getUTCFullYear();
   const years = Array.from({ length: y1 - y0 + 1 }, (_, i) => String(y0 + i));
   const rows = seriesNames.filter((s) => q.data?.some((r) => r.s === s)).reverse();
 
@@ -348,7 +365,7 @@ function PersonYearHeatmap() {
           click: (p: { value: [number, number, number] }) => {
             const name = rows[p.value[1]];
             const y = years[p.value[0]];
-            inspect({ title: `${name} · ${y}`, where: `year(ts) = ${y} AND ${seriesWhere(name)}`, from: 'ctx' });
+            inspect({ title: `${name} · ${y}`, where: `year(ts) = ${y} AND ${seriesWhere(name)}` });
           },
         }}
       />
@@ -439,20 +456,22 @@ function PeopleTable() {
 type Card = { sender: string; n: number; words: number; first_ts: number; last_ts: number; peak: number; got: number };
 
 function EveryoneGrid({ openPerson }: { openPerson: (name: string) => void }) {
-  const { conv, colorOf, seriesNames } = useConversation();
+  const { colorOf, seriesNames } = useConversation();
+  const [from, to] = useSelectedRange();
   const [q, setQ] = useState('');
   const cards = useQuery<Card>(`
     SELECT sender, count(*) AS n, coalesce(sum(words), 0) AS words, epoch_ms(min(ts)) AS first_ts, epoch_ms(max(ts)) AS last_ts,
            mode(hour(ts)) AS peak, coalesce(sum(n_reactions), 0) AS got
     FROM sel GROUP BY 1`);
-  // Monthly activity over the whole conversation span, so sparklines line up across cards.
+  // Activity over the selected range, on a shared axis so sparklines line up across cards;
+  // weekly bins for short ranges, monthly otherwise.
+  const unit = (to - from) / DAY <= 400 ? 'week' : 'month';
   const months = useQuery<{ sender: string; i: number; n: number }>(`
-    SELECT sender, date_diff('month', date_trunc('month', (SELECT min(ts) FROM conv)), date_trunc('month', ts))::INTEGER AS i, count(*) AS n
-    FROM ctx GROUP BY 1, 2`);
-  const span = (() => {
-    const a = new Date(conv.firstTs), b = new Date(conv.lastTs);
-    return (b.getUTCFullYear() - a.getUTCFullYear()) * 12 + b.getUTCMonth() - a.getUTCMonth() + 1;
-  })();
+    SELECT sender, date_diff('${unit}', date_trunc('${unit}', TIMESTAMP '${utc(from)}'), date_trunc('${unit}', ts))::INTEGER AS i, count(*) AS n
+    FROM sel GROUP BY 1, 2`);
+  const span = unit === 'week'
+    ? Math.floor((to - from) / (7 * DAY)) + 2
+    : (() => { const a = new Date(from), b = new Date(to); return (b.getUTCFullYear() - a.getUTCFullYear()) * 12 + b.getUTCMonth() - a.getUTCMonth() + 1; })();
   const series = useMemo(() => {
     const m = new Map<string, number[]>();
     for (const r of months.data ?? []) {
@@ -470,7 +489,7 @@ function EveryoneGrid({ openPerson }: { openPerson: (name: string) => void }) {
       title={`Everyone · ${byName.size} people`}
       actions={
         <div className="flex items-center gap-3">
-          <span className="text-[11px] text-ink-3">sparkline = messages per month over the whole conversation · click for a profile</span>
+          <span className="text-[11px] text-ink-3">sparkline = messages per {unit} in the selection · click for a profile</span>
           {byName.size > 12 && (
             <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Find…" className="h-6 w-36 rounded border border-line bg-surface-2 px-2 text-[12px] outline-none focus:border-accent" />
           )}

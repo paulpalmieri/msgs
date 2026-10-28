@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type DragEvent } from 'react';
 import { useData, type DataState } from '../app/DataProvider';
+import { useMedia } from '../media/MediaProvider';
 import { fromDataTransfer, fromDevExport, fromDirectoryHandle, fromFileList } from '../ingest/sources';
 import { fmtInt } from '../lib/format';
 import { Button } from '../ui/primitives';
@@ -8,6 +9,7 @@ type PickerWindow = Window & { showDirectoryPicker?: (opts?: { mode?: 'read' }) 
 
 export function ImportPage() {
   const { state, importFrom } = useData();
+  const media = useMedia();
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
   const [devRoot, setDevRoot] = useState<string | null>(null);
@@ -29,6 +31,7 @@ export function ImportPage() {
     } catch {
       return; // user cancelled
     }
+    void media.setFolders([handle]);
     await importFrom((onFound) => fromDirectoryHandle(handle, onFound), handle.name);
   };
 
@@ -36,8 +39,14 @@ export function ImportPage() {
     e.preventDefault();
     setDragging(false);
     const items = e.dataTransfer.items;
-    // fromDataTransfer reads the entries synchronously before its first await.
+    // Both read the dropped items synchronously, before their first await.
+    type HandleItem = DataTransferItem & { getAsFileSystemHandle?: () => Promise<FileSystemHandle | null> };
+    const handles = [...items].map((i) => (i as HandleItem).getAsFileSystemHandle?.());
     const pending = fromDataTransfer(items);
+    void Promise.all(handles).then((hs) => {
+      const dirs = hs.filter((h): h is FileSystemDirectoryHandle => h?.kind === 'directory');
+      if (dirs.length) void media.setFolders(dirs);
+    });
     const label = e.dataTransfer.files[0]?.name ?? 'dropped folder';
     void importFrom(() => pending, label);
   };
@@ -74,7 +83,7 @@ export function ImportPage() {
                   Choose export folder…
                 </Button>
                 {devRoot && (
-                  <Button onClick={() => importFrom(async () => (await fromDevExport())?.sources ?? [], devRoot)}>
+                  <Button onClick={() => (media.setDev(), importFrom(async () => (await fromDevExport())?.sources ?? [], devRoot))}>
                     Load dev export ({devRoot})
                   </Button>
                 )}
@@ -87,7 +96,9 @@ export function ImportPage() {
                 {...{ webkitdirectory: '' }}
                 onChange={(e) => {
                   const files = e.target.files;
-                  if (files?.length) void importFrom(async () => fromFileList(files), files[0].webkitRelativePath.split('/')[0]);
+                  if (!files?.length) return;
+                  media.setFiles([...files]);
+                  void importFrom(async () => fromFileList(files), files[0].webkitRelativePath.split('/')[0]);
                 }}
               />
             </div>

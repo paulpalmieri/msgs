@@ -3,6 +3,8 @@ import { ConversationProvider, useConversation } from '../app/ConversationProvid
 import { NO_FILTERS, type Filters, type Route, type Section } from '../app/router';
 import { Activity } from '../sections/Activity';
 import { Content } from '../sections/Content';
+import { LightboxProvider } from '../media/Lightbox';
+import { Media } from '../sections/Media';
 import { Messages } from '../sections/Messages';
 import { Overview } from '../sections/Overview';
 import { People } from '../sections/People';
@@ -26,6 +28,7 @@ function SectionView({ section, label, who, at, openPerson }: { section: Section
     case 'relations': return <Relations openPerson={openPerson} />;
     case 'reactions': return <Reactions openPerson={openPerson} />;
     case 'content': return <Content />;
+    case 'media': return <Media />;
     case 'messages': return <Messages at={at} />;
     case 'wrapped': return <Wrapped />;
     case 'sql': return <SqlSection />;
@@ -45,8 +48,8 @@ function Layout({ section, who, at, navigate }: { section: Section; who?: string
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
         e.preventDefault();
         setSwitching((s) => !s);
-      } else if (!isTyping(e) && !e.metaKey && !e.ctrlKey && !e.altKey && /^[1-9]$/.test(e.key)) {
-        const n = NAV[Number(e.key) - 1];
+      } else if (!isTyping(e) && !e.metaKey && !e.ctrlKey && !e.altKey && /^[0-9]$/.test(e.key)) {
+        const n = NAV[e.key === '0' ? 9 : Number(e.key) - 1];
         if (n) go(n.id);
       }
     };
@@ -56,10 +59,11 @@ function Layout({ section, who, at, navigate }: { section: Section; who?: string
 
   const nav = NAV.find((n) => n.id === section)!;
   return (
+    <LightboxProvider onContext={openInReader}>
     <div className="flex h-full">
       <Sidebar section={section} onSection={go} onSwitch={() => setSwitching(true)} onHome={() => navigate({ view: 'picker' })} />
       <div className="flex min-w-0 flex-1 flex-col">
-        <FilterBar />
+        <FilterBar section={section} />
         <main className="@container min-h-0 flex-1 overflow-auto">
           {epoch === 0 ? null : <SectionView section={section} label={nav.label} who={who} at={at} openPerson={openPerson} />}
         </main>
@@ -75,6 +79,7 @@ function Layout({ section, who, at, navigate }: { section: Section; who?: string
         />
       )}
     </div>
+    </LightboxProvider>
   );
 }
 

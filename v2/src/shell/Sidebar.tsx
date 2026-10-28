@@ -1,11 +1,12 @@
 import {
-  ArrowLeftRight, CalendarDays, ChevronLeft, LayoutDashboard, MessagesSquare, Network, Smile, Sparkles, Terminal, Type, Users,
+  ArrowLeftRight, CalendarDays, ChevronLeft, Image, LayoutDashboard, MessagesSquare, Network, Smile, Sparkles, Terminal, Type, Users,
   type LucideIcon,
 } from 'lucide-react';
 import { useState } from 'react';
 import { useConversation } from '../app/ConversationProvider';
 import type { Section } from '../app/router';
 import { fmtInt } from '../lib/format';
+import { useMedia } from '../media/MediaProvider';
 import { Badge } from '../ui/Badge';
 
 export const NAV: { id: Section; label: string; icon: LucideIcon; ready?: boolean }[] = [
@@ -15,12 +16,16 @@ export const NAV: { id: Section; label: string; icon: LucideIcon; ready?: boolea
   { id: 'relations', label: 'Relations', icon: Network, ready: true },
   { id: 'reactions', label: 'Reactions', icon: Smile, ready: true },
   { id: 'content', label: 'Content', icon: Type, ready: true },
+  { id: 'media', label: 'Media', icon: Image, ready: true },
   { id: 'messages', label: 'Messages', icon: MessagesSquare, ready: true },
   { id: 'sql', label: 'SQL', icon: Terminal, ready: true },
   { id: 'wrapped', label: 'Wrapped', icon: Sparkles, ready: true },
 ];
 
 const PEOPLE_SHOWN = 12;
+
+/** Keys 1–9 then 0 select sections. */
+export const navKey = (i: number) => (i < 9 ? String(i + 1) : i === 9 ? '0' : '');
 
 export function Sidebar({ section, onSection, onSwitch, onHome }: {
   section: Section;
@@ -65,7 +70,7 @@ export function Sidebar({ section, onSection, onSwitch, onHome }: {
             <n.icon size={15} className={section === n.id ? 'text-accent' : 'text-ink-3'} />
             <span className="flex-1">{n.label}</span>
             {!n.ready && <span className="text-[10px] text-ink-3">soon</span>}
-            <kbd className="text-[10px] text-ink-3">{i + 1}</kbd>
+            <kbd className="text-[10px] text-ink-3">{navKey(i)}</kbd>
           </button>
         ))}
       </div>
@@ -100,6 +105,25 @@ export function Sidebar({ section, onSection, onSwitch, onHome }: {
           </button>
         )}
       </div>
+      <MediaStatusLine />
     </nav>
+  );
+}
+
+/** Whether photos can be shown, with the one click that fixes it when not. */
+function MediaStatusLine() {
+  const { status, connect, reconnect } = useMedia();
+  if (status === 'checking') return null;
+  return (
+    <div className="flex h-9 shrink-0 items-center gap-2 border-t border-line px-3 text-[11px]">
+      <Image size={13} className="text-ink-3" />
+      {status === 'ready' ? (
+        <span className="text-ink-3">Photos &amp; videos available</span>
+      ) : (
+        <button onClick={() => void (status === 'needs-permission' ? reconnect() : connect())} className="text-accent hover:underline">
+          {status === 'needs-permission' ? 'Allow access to show photos' : 'Choose export folder to show photos'}
+        </button>
+      )}
+    </div>
   );
 }

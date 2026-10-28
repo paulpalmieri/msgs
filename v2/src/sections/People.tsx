@@ -1,6 +1,6 @@
 // People: one profile per person. Volume, rhythm, and their relation to
-// each other member. Profiles read `span` (date filter only) so a person
-// stays comparable to everyone else whatever the people filter says.
+// each other member. Profiles read `span` (dates + content types) so a
+// person stays comparable to everyone else whatever the people filter says.
 import { Search } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { useConversation } from '../app/ConversationProvider';
@@ -13,6 +13,7 @@ import { fmtCompact, fmtDate, fmtInt, fmtPct } from '../lib/format';
 import { fmtDuration, hourLabel, MONTHS, tsLit } from '../lib/time';
 import { Panel, Stat } from '../ui/primitives';
 import { ReplyWindowControl } from './Relations';
+import { MessagePreview } from '../media/MessagePreview';
 import { Badge } from '../ui/Badge';
 
 const MEDIA = "('photo','video','gif','sticker','audio','file')";
@@ -119,8 +120,8 @@ function VolumeAndShare({ name }: { name: string }) {
   const { colorOf, inspect } = useConversation();
   const P = lit(name);
   const q = useQuery<{ b: number; mine: number; total: number }>(`
-    WITH b AS (SELECT range AS b FROM range(date_trunc('month', (SELECT min(ts) FROM conv)), (SELECT max(ts) FROM conv) + INTERVAL 1 MONTH, INTERVAL 1 MONTH)),
-    c AS (SELECT date_trunc('month', ts) AS b, count(*) FILTER (sender = ${P}) AS mine, count(*) AS total FROM conv GROUP BY 1)
+    WITH b AS (SELECT range AS b FROM range(date_trunc('month', (SELECT min(ts) FROM span)), (SELECT max(ts) FROM span) + INTERVAL 1 MONTH, INTERVAL 1 MONTH)),
+    c AS (SELECT date_trunc('month', ts) AS b, count(*) FILTER (sender = ${P}) AS mine, count(*) AS total FROM span GROUP BY 1)
     SELECT epoch_ms(b.b) AS b, coalesce(c.mine, 0) AS mine, coalesce(c.total, 0) AS total FROM b LEFT JOIN c USING (b) ORDER BY 1`);
   const data = q.data ?? [];
   const label = (ms: number) => { const d = new Date(ms); return `${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`; };
@@ -156,7 +157,7 @@ function VolumeAndShare({ name }: { name: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q.data, t, name, colorOf]);
   return (
-    <Panel title="Messages and share of the conversation, by month" actions={<span className="text-[11px] text-ink-3">whole conversation · click a month to read</span>} bodyClassName="p-2">
+    <Panel title="Messages and share of the conversation, by month" actions={<span className="text-[11px] text-ink-3">selected dates · click a month to read</span>} bodyClassName="p-2">
       <EChart
         option={option}
         height={300}
@@ -165,7 +166,7 @@ function VolumeAndShare({ name }: { name: string }) {
           click: (p: { dataIndex: number }) => {
             const r = data[p.dataIndex];
             const next = data[p.dataIndex + 1]?.b ?? r.b + 31 * 86_400_000;
-            inspect({ title: `${name} · ${label(r.b)}`, where: `sender = ${P} AND ts >= ${tsLit(r.b)} AND ts < ${tsLit(next)}`, from: 'ctx' });
+            inspect({ title: `${name} · ${label(r.b)}`, where: `sender = ${P} AND ts >= ${tsLit(r.b)} AND ts < ${tsLit(next)}`, from: 'span' });
           },
         }}
       />
@@ -173,18 +174,29 @@ function VolumeAndShare({ name }: { name: string }) {
   );
 }
 
-function HourVsRest({ name }: { name: string }) {
+/**
+ * This person's daily rhythm against the whole conversation's. The group line
+ * includes everyone (this person too), so it stays the same whoever is
+ * selected; only the person's line moves.
+ */
+function HourVsGroup({ name }: { name: string }) {
   const t = useChartTheme();
   const { colorOf } = useConversation();
   const P = lit(name);
-  const q = useQuery<{ h: number; mine: number; rest: number }>(`
-    SELECT hour(ts) AS h, count(*) FILTER (sender = ${P}) AS mine, count(*) FILTER (sender <> ${P}) AS rest FROM span GROUP BY 1`);
+  const q = useQuery<{ h: number; mine: number; total: number }>(`
+    SELECT hour(ts) AS h, count(*) FILTER (sender = ${P}) AS mine, count(*) AS total FROM span GROUP BY 1`);
   const option = useMemo(() => {
     const base = baseOption(t);
-    const mine = new Array(24).fill(0), rest = new Array(24).fill(0);
-    for (const r of q.data ?? []) (mine[r.h] = r.mine), (rest[r.h] = r.rest);
-    const sm = mine.reduce((a, b) => a + b, 0) || 1, sr = rest.reduce((a, b) => a + b, 0) || 1;
-    const names = [name, 'Everyone else'];
+    const mine = new Array(24).fill(0), all = new Array(24).fill(0);
+    for (const r of q.data ?? []) {
+      mine[r.h] = r.mine;
+      all[r.h] = r.total;
+    }
+    const sm = mine.reduce((a, b) => a + b, 0) || 1, sa = all.reduce((a, b) => a + b, 0) || 1;
+    const group = all.map((n) => (n / sa) * 100);
+    const person = mine.map((n) => (n / sm) * 100);
+    const first = name.split(' ')[0];
+    const names = ['Whole conversation', first];
     return {
       ...base,
       grid: { ...base.grid, top: 36 },
@@ -193,20 +205,34 @@ function HourVsRest({ name }: { name: string }) {
         ...base.tooltip,
         trigger: 'axis',
         axisPointer: { type: 'line', lineStyle: { color: t.axis } },
-        formatter: (ps: { seriesName: string; value: number; color: string; dataIndex: number }[]) =>
-          `<div style="margin-bottom:4px;opacity:.7">${hourLabel(ps[0].dataIndex)}</div>` + ps.map((p) => tipRow(p.color, `${p.value.toFixed(1)}%`, p.seriesName)).join(''),
+        formatter: (ps: { dataIndex: number }[]) => {
+          const h = ps[0].dataIndex;
+          const d = person[h] - group[h];
+          return `<div style="margin-bottom:4px;opacity:.7">${hourLabel(h)}–${hourLabel((h + 1) % 24)}</div>` +
+            tipRow(colorOf(name), `${person[h].toFixed(1)}%`, `of ${first}’s messages`) +
+            tipRow(t.ink2, `${group[h].toFixed(1)}%`, 'of the conversation’s messages') +
+            tipRow(t.muted, `${d >= 0 ? '+' : ''}${d.toFixed(1)} pts`, d >= 0 ? `${first} is more active than usual` : `${first} is quieter than usual`);
+        },
       },
       xAxis: { type: 'category', data: Array.from({ length: 24 }, (_, h) => hourLabel(h)), boundaryGap: false, ...base.axisCommon, splitLine: { show: false } },
       yAxis: { type: 'value', ...base.axisCommon, axisLine: { show: false }, axisLabel: { ...base.axisCommon.axisLabel, formatter: '{value}%' } },
       series: [
-        { name, type: 'line', smooth: 0.25, symbol: 'none', lineStyle: { width: 2, color: colorOf(name) }, itemStyle: { color: colorOf(name) }, areaStyle: { color: colorOf(name), opacity: 0.12 }, data: mine.map((n) => (n / sm) * 100) },
-        { name: 'Everyone else', type: 'line', smooth: 0.25, symbol: 'none', lineStyle: { width: 2, color: t.muted, type: 'dashed' }, itemStyle: { color: t.muted }, data: rest.map((n) => (n / sr) * 100) },
+        {
+          name: names[0], type: 'line', smooth: 0.25, symbol: 'none',
+          lineStyle: { width: 2, color: t.ink2 }, itemStyle: { color: t.ink2 }, areaStyle: { color: t.ink2, opacity: 0.08 },
+          data: group,
+        },
+        {
+          name: names[1], type: 'line', smooth: 0.25, symbol: 'none',
+          lineStyle: { width: 2.5, color: colorOf(name), type: 'dashed' }, itemStyle: { color: colorOf(name) },
+          data: person,
+        },
       ],
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q.data, t, name, colorOf]);
   return (
-    <Panel title="Hour of day vs everyone else" bodyClassName="p-2">
+    <Panel title="Hour of day vs the whole conversation" actions={<span className="text-[11px] text-ink-3">share of messages per hour · dashed = this person</span>} bodyClassName="p-2">
       <EChart option={option} height={260} dimmed={q.loading} />
     </Panel>
   );
@@ -381,8 +407,9 @@ function ReactionsWith({ name }: { name: string }) {
 function TopReacted({ name }: { name: string }) {
   const { inspect } = useConversation();
   const P = lit(name);
-  const q = useQuery<{ message_id: number; ts: number; text: string | null; kind: string; n: number; emojis: string }>(`
-    SELECT m.message_id, epoch_ms(m.ts) AS ts, m.text, m.kind, count(*) AS n, string_agg(r.reaction, '') AS emojis
+  const q = useQuery<{ message_id: number; ts: number; text: string | null; kind: string; n: number; emojis: string; atts: string | null }>(`
+    SELECT m.message_id, epoch_ms(m.ts) AS ts, m.text, m.kind, count(*) AS n, string_agg(r.reaction, '') AS emojis,
+           (SELECT to_json(list({'t': type, 'u': uri} ORDER BY uri))::VARCHAR FROM attachments a WHERE a.message_id = m.message_id) AS atts
     FROM span m JOIN reactions r USING (message_id)
     WHERE m.sender = ${P} GROUP BY 1, 2, 3, 4 ORDER BY n DESC, ts DESC LIMIT 10`);
   return (
@@ -395,7 +422,7 @@ function TopReacted({ name }: { name: string }) {
             className="flex w-full items-start gap-3 border-b border-line/60 px-3 py-2 text-left hover:bg-surface-2"
           >
             <span className="num w-8 shrink-0 text-right font-semibold">{m.n}</span>
-            <span className={`min-w-0 flex-1 ${m.text ? '' : 'italic text-ink-3'}`}>{m.text ?? m.kind}</span>
+            <MessagePreview text={m.text} kind={m.kind} atts={m.atts} />
             <span className="shrink-0 text-[13px]">{[...new Set(m.emojis)].slice(0, 6).join('')}</span>
             <span className="num w-24 shrink-0 text-right text-[11px] text-ink-3">{fmtDate(m.ts)}</span>
           </button>
@@ -421,7 +448,7 @@ export function People({ who, setWho }: { who?: string; setWho: (name: string) =
           <Header name={name} />
           <VolumeAndShare name={name} />
           <div className="grid grid-cols-1 gap-3 @5xl:grid-cols-[3fr_2fr]">
-            <HourVsRest name={name} />
+            <HourVsGroup name={name} />
             <TopReacted name={name} />
           </div>
           <div className="pt-1"><ReplyWindowControl /></div>

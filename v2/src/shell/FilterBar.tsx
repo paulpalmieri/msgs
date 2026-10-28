@@ -2,7 +2,7 @@
 import { Calendar, Check, ChevronDown, Search, Users, X } from 'lucide-react';
 import { useState } from 'react';
 import { useConversation } from '../app/ConversationProvider';
-import { KIND_GROUPS, NO_FILTERS, type Filters, type KindGroup } from '../app/router';
+import { KIND_GROUPS, NO_FILTERS, type Filters, type KindGroup, type Section } from '../app/router';
 import { useQuery } from '../db/useQuery';
 import { fmtInt } from '../lib/format';
 import { Popover } from '../ui/Popover';
@@ -147,7 +147,15 @@ function KindsFilter() {
   );
 }
 
-export function FilterBar() {
+/** Sections that read the filters differently say so next to them. */
+const SCOPE_NOTES: Partial<Record<Section, string>> = {
+  people: 'Profiles use dates and types, not the people filter',
+  relations: 'People filter keeps exchanges involving them',
+  reactions: 'People filter keeps reactions given or received by them',
+  wrapped: 'Wrapped ignores these filters',
+};
+
+export function FilterBar({ section }: { section: Section }) {
   const { conv, filters, setFilters } = useConversation();
   const count = useQuery<{ n: number }>(`SELECT count(*) AS n FROM sel`).data?.[0]?.n;
   const filtered = !!(filters.from || filters.to || filters.people.length || filters.kinds.length);
@@ -156,6 +164,9 @@ export function FilterBar() {
       <DateRange key={`${filters.from}-${filters.to}`} />
       <PeopleFilter />
       <KindsFilter />
+      {SCOPE_NOTES[section] && (
+        <span className="truncate text-[11px] text-ink-3" title={SCOPE_NOTES[section]}>ⓘ {SCOPE_NOTES[section]}</span>
+      )}
       <div className="ml-auto flex shrink-0 items-center gap-3 whitespace-nowrap">
         <span className="num text-ink-3">
           {filtered ? <><b className="font-semibold text-ink">{fmtInt(count)}</b> of {fmtInt(conv.messages)} messages</> : <>{fmtInt(conv.messages)} messages</>}

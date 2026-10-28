@@ -8,6 +8,7 @@ import { useConversation } from '../app/ConversationProvider';
 import { searchRegExp, useReader, type ReaderMsg, type Search as SearchQuery, type SearchMode } from '../app/reader';
 import { fmtInt } from '../lib/format';
 import { fmtDuration, MONTHS } from '../lib/time';
+import { AttachmentStrip } from '../media/AttachmentStrip';
 import { Segmented } from '../ui/primitives';
 import { Badge } from '../ui/Badge';
 
@@ -33,8 +34,6 @@ function Highlight({ text, re }: { text: string; re: RegExp | null }) {
   return <>{out}</>;
 }
 
-const ATT_LABEL: Record<string, string> = { photo: 'photo', video: 'video', gif: 'GIF', audio: 'voice message', file: 'file', sticker: 'sticker' };
-
 function Body({ m, re }: { m: ReaderMsg; re: RegExp | null }) {
   const muted = 'italic text-ink-3';
   if (m.kind === 'call') {
@@ -42,15 +41,8 @@ function Body({ m, re }: { m: ReaderMsg; re: RegExp | null }) {
   }
   if (m.kind === 'unsent') return <span className={muted}>Message unsent</span>;
   if (m.kind === 'other') return <span className={muted}>Empty message (no content in the export)</span>;
-  const counts = new Map<string, number>();
-  for (const a of m.attachments) counts.set(a, (counts.get(a) ?? 0) + 1);
   return (
     <>
-      {[...counts].map(([type, n]) => (
-        <span key={type} className="mr-2 inline-block rounded bg-surface-2 px-1.5 text-[11px] text-ink-2">
-          {n > 1 ? `${n} ${ATT_LABEL[type] ?? type}s` : ATT_LABEL[type] ?? type}
-        </span>
-      ))}
       {m.text && <span className="whitespace-pre-wrap break-words"><Highlight text={m.text} re={re} /></span>}
       {m.link && m.link !== m.text && (
         <a href={m.link} target="_blank" rel="noreferrer noopener" className="ml-1 inline-flex max-w-full items-center gap-1 truncate align-bottom text-accent hover:underline">
@@ -58,6 +50,7 @@ function Body({ m, re }: { m: ReaderMsg; re: RegExp | null }) {
           <span className="truncate"><Highlight text={m.link} re={re} /></span>
         </a>
       )}
+      <AttachmentStrip message={m} attachments={m.attachments} size={128} />
     </>
   );
 }

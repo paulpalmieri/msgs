@@ -12,12 +12,17 @@ import { loadMetrics, superlatives, winners, type Metrics, type Winner } from '.
 
 const MEDIA_KINDS = ['photo', 'video', 'gif', 'audio', 'sticker', 'link', 'call'] as const;
 
+export type Photo = { uri: string; type: 'photo' | 'gif'; n: number; ts: number; sender: string };
+
 export interface Period {
   year: number | null;
   /** Per-day counts (a year) or per-month counts (all time), for the squares slide. */
   days: { d: number; n: number }[];
   monthly: number[];
   hourly: number[];
+  /** The period's most reacted photos (and GIFs), for the collage slide. */
+  photos: Photo[];
+  photoCount: number;
 }
 
 export interface WrappedData extends Period {
@@ -47,7 +52,7 @@ export interface WrappedData extends Period {
   streak: { days: number; from: number; to: number } | null;
   media: Record<(typeof MEDIA_KINDS)[number], number>;
   topWords: { w: string; n: number }[];
-  bestMessage: { text: string | null; kind: string; n: number; emojis: string; ts: number } | null;
+  bestMessage: { text: string | null; kind: string; n: number; emojis: string; ts: number; uri: string | null } | null;
   /** Their personal title, and any award they lead outright (groups). */
   title: Winner | null;
   won: Winner[];
@@ -62,7 +67,7 @@ export interface GroupWrapped extends Period {
   words: number;
   podium: { name: string; n: number }[];
   busiestDay: { day: number; n: number; top: string } | null;
-  bestMessage: { sender: string; text: string | null; kind: string; n: number; emojis: string; ts: number } | null;
+  bestMessage: { sender: string; text: string | null; kind: string; n: number; emojis: string; ts: number; uri: string | null } | null;
   duo: { a: string; b: string; n: number } | null;
   topWords: { w: string; n: number }[];
   topReactions: { e: string; n: number }[];
@@ -90,7 +95,14 @@ async function period(year: number | null, who: string | null): Promise<Period> 
     for (const r of await query<{ k: number; n: number }>(`SELECT ${expr} AS k, count(*) AS n FROM wrapped_msgs ${w} GROUP BY 1`)) out[r.k] = r.n;
     return out;
   };
-  return { year, days, monthly: await dist('month(ts) - 1', 12), hourly: await dist('hour(ts)', 24) };
+  const who2 = who ? `AND m.sender = ${lit(who)}` : '';
+  const photos = await query<Photo>(`
+    SELECT a.uri, a.type, m.n_reactions AS n, epoch_ms(m.ts) AS ts, m.sender
+    FROM attachments a JOIN wrapped_msgs m USING (message_id)
+    WHERE a.type IN ('photo', 'gif') ${who2}
+    ORDER BY m.n_reactions DESC, m.ts DESC LIMIT 9`);
+  const [pc] = await query<{ n: number }>(`SELECT count(*) AS n FROM attachments a JOIN wrapped_msgs m USING (message_id) WHERE a.type = 'photo' ${who2}`);
+  return { year, days, monthly: await dist('month(ts) - 1', 12), hourly: await dist('hour(ts)', 24), photos, photoCount: pc?.n ?? 0 };
 }
 
 const topWordsSql = (who: string | null) => `
@@ -143,8 +155,9 @@ export async function loadWrapped(conv: Conversation, person: string, year: numb
     SELECT count(*) AS days, epoch_ms(min(d)::TIMESTAMP) AS from_ms, epoch_ms(max(d)::TIMESTAMP) AS to_ms
     FROM g GROUP BY grp ORDER BY days DESC LIMIT 1`);
 
-  const [best] = await query<{ text: string | null; kind: string; n: number; emojis: string; ts: number }>(`
-    SELECT m.text, m.kind, count(*) AS n, string_agg(r.reaction, '') AS emojis, epoch_ms(m.ts) AS ts
+  const [best] = await query<{ text: string | null; kind: string; n: number; emojis: string; ts: number; uri: string | null }>(`
+    SELECT m.text, m.kind, count(*) AS n, string_agg(r.reaction, '') AS emojis, epoch_ms(m.ts) AS ts,
+           (SELECT min(uri) FROM attachments a WHERE a.message_id = m.message_id AND a.type IN ('photo', 'gif')) AS uri
     FROM wrapped_msgs m JOIN reactions r USING (message_id) WHERE m.sender = ${P}
     GROUP BY m.message_id, m.text, m.kind, m.ts ORDER BY n DESC, m.ts DESC LIMIT 1`);
 
@@ -197,8 +210,9 @@ export async function loadGroupWrapped(conv: Conversation, year: number | null):
   const podium = await query<{ name: string; n: number }>(`SELECT sender AS name, count(*) AS n FROM wrapped_msgs GROUP BY 1 ORDER BY n DESC LIMIT 3`);
   const [busiest] = await query<{ day: number; n: number; top: string }>(`
     SELECT epoch_ms(ts::DATE::TIMESTAMP) AS day, count(*) AS n, mode(sender) AS top FROM wrapped_msgs GROUP BY 1 ORDER BY n DESC LIMIT 1`);
-  const [best] = await query<{ sender: string; text: string | null; kind: string; n: number; emojis: string; ts: number }>(`
-    SELECT m.sender, m.text, m.kind, count(*) AS n, string_agg(r.reaction, '') AS emojis, epoch_ms(m.ts) AS ts
+  const [best] = await query<{ sender: string; text: string | null; kind: string; n: number; emojis: string; ts: number; uri: string | null }>(`
+    SELECT m.sender, m.text, m.kind, count(*) AS n, string_agg(r.reaction, '') AS emojis, epoch_ms(m.ts) AS ts,
+           (SELECT min(uri) FROM attachments a WHERE a.message_id = m.message_id AND a.type IN ('photo', 'gif')) AS uri
     FROM wrapped_msgs m JOIN reactions r USING (message_id)
     GROUP BY m.message_id, m.sender, m.text, m.kind, m.ts ORDER BY n DESC, m.ts DESC LIMIT 1`);
   const [duo] = await query<{ a: string; b: string; n: number }>(`

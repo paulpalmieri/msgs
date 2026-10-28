@@ -5,6 +5,7 @@
 //   reader   rn (0-based position), message_id, ts
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { getEngine, lit, run } from '../db/duckdb';
+import type { Attachment } from '../media/AttachmentStrip';
 
 export type SearchMode = 'text' | 'word' | 'regex';
 export interface Search {
@@ -24,7 +25,7 @@ export type ReaderMsg = {
   call_duration: number | null;
   call_missed: boolean | null;
   reactions: { a: string; e: string }[];
-  attachments: string[];
+  attachments: Attachment[];
   hit: boolean;
 };
 
@@ -117,7 +118,7 @@ export function useReader(epoch: number, search: Search, onlyMatches: boolean) {
         run<Omit<ReaderMsg, 'reactions' | 'attachments'> & { reactions: string | null; attachments: string | null }>(`
           SELECT r.rn, m.message_id, epoch_ms(m.ts) AS ts, m.sender, m.kind, m.text, m.link, m.n_attachments, m.call_duration, m.call_missed,
                  (SELECT to_json(list({'a': actor, 'e': reaction}))::VARCHAR FROM reactions x WHERE x.message_id = m.message_id) AS reactions,
-                 (SELECT to_json(list(type))::VARCHAR FROM attachments a WHERE a.message_id = m.message_id) AS attachments,
+                 (SELECT to_json(list({'t': type, 'u': uri} ORDER BY uri))::VARCHAR FROM attachments a WHERE a.message_id = m.message_id) AS attachments,
                  ${pred ?? 'FALSE'} AS hit
           FROM reader r JOIN messages m USING (message_id)
           WHERE r.rn BETWEEN ${p * PAGE} AND ${p * PAGE + PAGE - 1} ORDER BY r.rn`)
