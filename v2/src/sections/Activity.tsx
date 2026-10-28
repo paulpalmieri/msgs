@@ -1,43 +1,20 @@
-// Activity: when the conversation happens. Calendar, daily and weekly
-// rhythms per person, sessions (bursts of back-and-forth), streaks and silences.
+// Activity: when the conversation happens. One heatmap (weekday × hour);
+// everything else is a chart for one question: a year's calendar, parts of
+// the day over time, each person's hourly shape, weekend habits, and every
+// day with its silences.
 import { useMemo, useState } from 'react';
 import { useConversation } from '../app/ConversationProvider';
 import { EChart } from '../charts/EChart';
-import { gridHeatmap, personHeatmap, quantile } from '../charts/heatmap';
+import { gridHeatmap, quantile } from '../charts/heatmap';
 import { baseOption, esc, tipRow, useChartTheme } from '../charts/theme';
 import { useQuery } from '../db/useQuery';
 import { fmtDate, fmtInt, fmtPct } from '../lib/format';
-import { DAY, fmtDuration, hourLabel, MINUTE, tsLit, WEEKDAYS } from '../lib/time';
+import { DAY, fmtDuration, hourLabel, tsLit, WEEKDAYS } from '../lib/time';
 import { Badge } from '../ui/Badge';
 import { Panel, Segmented, Stat } from '../ui/primitives';
 
 const HOURS = Array.from({ length: 24 }, (_, h) => hourLabel(h));
 const longDay = new Intl.DateTimeFormat('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
-
-// --- Sessions -------------------------------------------------------------------
-// A session is a run of messages with no pause longer than the chosen gap.
-
-const GAPS = [['15', '15 min'], ['30', '30 min'], ['60', '1 h'], ['120', '2 h'], ['360', '6 h']] as const;
-type Gap = (typeof GAPS)[number][0];
-
-function sessionsCte(gapMin: Gap, seriesSql: string) {
-  return `
-    WITH m AS (
-      SELECT ts, sender, ${seriesSql} AS s, message_id,
-             CASE WHEN lag(ts) OVER w IS NULL OR ts - lag(ts) OVER w > INTERVAL ${gapMin} MINUTE THEN 1 ELSE 0 END AS starts
-      FROM sel WINDOW w AS (ORDER BY ts, message_id)
-    ),
-    m2 AS (SELECT *, sum(starts) OVER (ORDER BY ts, message_id ROWS UNBOUNDED PRECEDING) AS sid FROM m),
-    sessions AS (
-      SELECT sid, epoch_ms(min(ts)) AS start_ms, epoch_ms(max(ts)) AS end_ms, count(*) AS n,
-             count(DISTINCT sender) AS people, arg_min(s, (ts, message_id)) AS starter, arg_max(s, (ts, message_id)) AS ender
-      FROM m2 GROUP BY sid
-    )`;
-}
-
-const SESSION_BINS: [string, number][] = [
-  ['< 1 min', 1], ['1–5 min', 5], ['5–15 min', 15], ['15–30 min', 30], ['30–60 min', 60], ['1–2 h', 120], ['2–4 h', 240], ['4 h +', Infinity],
-];
 
 // --- KPIs ------------------------------------------------------------------------
 
@@ -80,11 +57,15 @@ function CalendarPanel() {
   const q = useQuery<{ d: string; n: number }>(`SELECT strftime(ts::DATE, '%Y-%m-%d') AS d, count(*) AS n FROM sel GROUP BY 1`);
   const days = q.data ?? [];
   const years = [...new Set(days.map((r) => Number(r.d.slice(0, 4))))].sort((a, b) => b - a);
-  const CELL = 13;
-  const YEAR_H = CELL * 7 + 30;
+  const [picked, setPicked] = useState<number | null>(null);
+  const year = picked !== null && years.includes(picked) ? picked : years[0];
+  const yearDays = days.filter((r) => r.d.startsWith(String(year)));
+  const totals = new Map<number, number>();
+  for (const r of days) totals.set(Number(r.d.slice(0, 4)), (totals.get(Number(r.d.slice(0, 4))) ?? 0) + r.n);
 
   const option = useMemo(() => {
     const base = baseOption(t);
+    // One colour scale for every year, so switching years compares fairly.
     const max = quantile(days.map((r) => r.n), 0.97);
     return {
       ...base,
@@ -95,38 +76,46 @@ function CalendarPanel() {
           `<div style="margin-bottom:4px;opacity:.7">${esc(longDay.format(new Date(`${p.value[0]}T00:00:00Z`)))}</div>` + tipRow(t.series[0], fmtInt(p.value[1]), 'messages'),
       },
       visualMap: {
-        min: 0, max, calculable: false, orient: 'horizontal', right: 16, top: 0, itemHeight: 120, itemWidth: 10,
+        min: 0, max, calculable: false, orient: 'horizontal', right: 16, bottom: 0, itemHeight: 120, itemWidth: 10,
         text: [`${fmtInt(max)}+`, '1'], textStyle: { color: t.muted, fontSize: 10 }, inRange: { color: t.seq.slice(1) },
       },
-      calendar: years.map((y, i) => ({
-        top: 34 + i * YEAR_H,
-        left: 56,
-        right: 16,
-        range: String(y),
-        cellSize: ['auto', CELL],
+      calendar: {
+        top: 24, left: 40, right: 16, bottom: 36,
+        range: String(year ?? new Date().getFullYear()),
+        cellSize: ['auto', 'auto'],
         splitLine: { show: false },
-        itemStyle: { color: t.seq[0], borderColor: t.surface, borderWidth: 2 },
-        yearLabel: { show: true, position: 'left', margin: 36, color: t.ink, fontSize: 12, fontWeight: 600 },
-        monthLabel: { color: t.muted, fontSize: 10, nameMap: 'EN' },
-        dayLabel: { firstDay: 1, color: t.muted, fontSize: 9, nameMap: ['S', 'M', 'T', 'W', 'T', 'F', 'S'] },
-      })),
-      series: years.map((y, i) => ({
-        type: 'heatmap',
-        coordinateSystem: 'calendar',
-        calendarIndex: i,
-        data: days.filter((r) => r.d.startsWith(String(y))).map((r) => [r.d, r.n]),
-        itemStyle: { borderRadius: 2 },
+        itemStyle: { color: t.seq[0], borderColor: t.surface, borderWidth: 3 },
+        yearLabel: { show: false },
+        monthLabel: { color: t.muted, fontSize: 11, nameMap: 'EN' },
+        dayLabel: { firstDay: 1, color: t.muted, fontSize: 10, nameMap: ['S', 'M', 'T', 'W', 'T', 'F', 'S'] },
+      },
+      series: [{
+        type: 'heatmap', coordinateSystem: 'calendar',
+        data: yearDays.map((r) => [r.d, r.n]),
+        itemStyle: { borderRadius: 3 },
         emphasis: { itemStyle: { borderColor: t.ink, borderWidth: 1 } },
-      })),
+      }],
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [q.data, t]);
+  }, [q.data, year, t]);
 
   return (
-    <Panel title="Calendar" actions={<span className="text-[11px] text-ink-3">{years.length} years · click a day to read it</span>} bodyClassName="p-2">
+    <Panel
+      title="Calendar"
+      actions={
+        <div className="flex flex-wrap items-center justify-end gap-1">
+          {years.map((y) => (
+            <button key={y} onClick={() => setPicked(y)} className={`h-6 rounded px-2 text-[11px] ${y === year ? 'bg-accent-soft font-medium text-ink' : 'text-ink-3 hover:text-ink'}`} title={`${fmtInt(totals.get(y))} messages`}>
+              {y}
+            </button>
+          ))}
+        </div>
+      }
+      bodyClassName="p-2"
+    >
       <EChart
         option={option}
-        height={Math.max(150, 34 + years.length * YEAR_H)}
+        height={230}
         dimmed={q.loading}
         on={{
           click: (p: { value: [string, number] }) =>
@@ -142,31 +131,62 @@ function CalendarPanel() {
 function WeekHourHeatmap() {
   const t = useChartTheme();
   const { inspect } = useConversation();
+  const [view, setView] = useState<'grid' | 'clock'>('grid');
   const q = useQuery<{ dow: number; h: number; n: number }>(`SELECT isodow(ts) AS dow, hour(ts) AS h, count(*) AS n FROM sel GROUP BY 1, 2`);
   const rows = [...WEEKDAYS].reverse(); // Monday on top
-  const option = useMemo(
-    () => gridHeatmap(t, {
-      x: HOURS,
-      y: rows,
-      cells: (q.data ?? []).map((r) => [r.h, 7 - r.dow, r.n]),
-      title: (x, y) => `${y} · ${x}`,
-      value: (v) => `${fmtInt(v)} messages`,
-      labelWidth: 40,
-    }),
+  const option = useMemo(() => {
+    if (view === 'grid') {
+      return gridHeatmap(t, {
+        x: HOURS, y: rows,
+        cells: (q.data ?? []).map((r) => [r.h, 7 - r.dow, r.n]),
+        title: (x, y) => `${y} · ${x}`,
+        value: (v) => `${fmtInt(v)} messages`,
+        labelWidth: 40,
+      });
+    }
+    // The same 24 hours as a clock: midnight at the top, weekdays stacked weekend-last.
+    const base = baseOption(t);
+    const per = (dow: number) => HOURS.map((_, h) => q.data?.find((r) => r.dow === dow && r.h === h)?.n ?? 0);
+    const weekday = HOURS.map((_, h) => [1, 2, 3, 4, 5].reduce((a, d) => a + per(d)[h], 0));
+    const weekend = HOURS.map((_, h) => [6, 7].reduce((a, d) => a + per(d)[h], 0));
+    return {
+      ...base,
+      legend: { bottom: 0, left: 'center', icon: 'rect', itemWidth: 10, itemHeight: 10, textStyle: { color: t.ink2, fontSize: 11 } },
+      tooltip: {
+        ...base.tooltip, trigger: 'axis',
+        formatter: (ps: { seriesName: string; value: number; color: string; dataIndex: number }[]) =>
+          `<div style="margin-bottom:4px;opacity:.7">${HOURS[ps[0].dataIndex]}–${HOURS[(ps[0].dataIndex + 1) % 24]}</div>` + ps.map((p) => tipRow(p.color, fmtInt(p.value), p.seriesName)).join(''),
+      },
+      polar: { radius: ['14%', '78%'], center: ['50%', '48%'] },
+      angleAxis: { type: 'category', data: HOURS, startAngle: 90 + 7.5, axisLine: { lineStyle: { color: t.axis } }, axisTick: { show: false }, axisLabel: { color: t.muted, fontSize: 10, interval: 2 }, splitLine: { show: false } },
+      radiusAxis: { axisLabel: { show: false }, axisLine: { show: false }, axisTick: { show: false }, splitLine: { lineStyle: { color: t.grid } } },
+      series: [
+        { name: 'Weekdays', type: 'bar', coordinateSystem: 'polar', stack: 'h', data: weekday, itemStyle: { color: t.series[0] } },
+        { name: 'Weekends', type: 'bar', coordinateSystem: 'polar', stack: 'h', data: weekend, itemStyle: { color: t.seq[t.dark ? 6 : 2] } },
+      ],
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [q.data, t],
-  );
+  }, [q.data, t, view]);
   return (
-    <Panel title="Weekday × hour" actions={<span className="text-[11px] text-ink-3">click a cell to read</span>} bodyClassName="p-2">
+    <Panel
+      title="Weekday × hour"
+      actions={<div className="flex items-center gap-3"><span className="text-[11px] text-ink-3">click to read</span><Segmented value={view} options={[['grid', 'Grid'], ['clock', 'Clock']]} onChange={setView} /></div>}
+      bodyClassName="p-2"
+    >
       <EChart
         option={option}
-        height={260}
+        height={view === 'grid' ? 260 : 320}
         dimmed={q.loading}
         on={{
-          click: (p: { value: [number, number, number] }) => {
-            const dow = 7 - p.value[1];
-            const h = p.value[0];
-            inspect({ title: `${WEEKDAYS[dow - 1]}s, ${hourLabel(h)}–${hourLabel((h + 1) % 24)}`, where: `isodow(ts) = ${dow} AND hour(ts) = ${h}` });
+          click: (p: { value: [number, number, number] | number; dataIndex: number; seriesName?: string }) => {
+            if (view === 'clock') {
+              const h = p.dataIndex;
+              const weekend = p.seriesName === 'Weekends';
+              return inspect({ title: `${weekend ? 'Weekends' : 'Weekdays'}, ${hourLabel(h)}–${hourLabel((h + 1) % 24)}`, where: `hour(ts) = ${h} AND isodow(ts) ${weekend ? '>= 6' : '<= 5'}` });
+            }
+            const v = p.value as [number, number, number];
+            const dow = 7 - v[1];
+            inspect({ title: `${WEEKDAYS[dow - 1]}s, ${hourLabel(v[0])}–${hourLabel((v[0] + 1) % 24)}`, where: `isodow(ts) = ${dow} AND hour(ts) = ${v[0]}` });
           },
         }}
       />
@@ -174,34 +194,85 @@ function WeekHourHeatmap() {
   );
 }
 
-/** Each person's messages over hours / weekdays, as a share of their own total: one row per person. */
-function RhythmByPerson({ unit }: { unit: 'hour' | 'dow' }) {
+const RIDGE_ROW = 30;
+const RIDGE_LIMIT = 20;
+
+/**
+ * One small hourly curve per person, stacked like a ridgeline, each over the
+ * group's curve (grey). All rows share one scale, so a tall narrow peak means
+ * a person concentrated in a few hours.
+ */
+function HourRidgeline() {
   const t = useChartTheme();
   const { seriesNames, seriesWhere, colorOf, inspect } = useConversation();
-  const expr = unit === 'hour' ? 'hour(ts)' : 'isodow(ts) - 1';
-  const q = useQuery<{ s: string; k: number; n: number }>(`SELECT sender AS s, ${expr} AS k, count(*) AS n FROM sel GROUP BY 1, 2`);
-  const labels = unit === 'hour' ? HOURS : WEEKDAYS;
+  const [all, setAll] = useState(false);
+  const q = useQuery<{ s: string; h: number; n: number }>(`SELECT sender AS s, hour(ts) AS h, count(*) AS n FROM sel GROUP BY 1, 2`);
 
-  const { option, rows, height } = useMemo(() => {
-    const values = new Map<string, number[]>();
+  const { option, people, height } = useMemo(() => {
+    const base = baseOption(t);
+    const by = new Map<string, number[]>();
+    const group = new Array(24).fill(0);
     for (const r of q.data ?? []) {
-      let arr = values.get(r.s);
-      if (!arr) values.set(r.s, (arr = new Array(labels.length).fill(0)));
-      arr[r.k] = r.n;
+      let arr = by.get(r.s);
+      if (!arr) by.set(r.s, (arr = new Array(24).fill(0)));
+      arr[r.h] = r.n;
+      group[r.h] += r.n;
     }
-    return personHeatmap(t, {
-      people: seriesNames, colorOf, x: labels, values, rowShare: true,
-      title: (x, p) => `${p} · ${x}`,
-      value: (v) => `${v.toFixed(1)}% of their messages`,
-      legend: ['more', 'less'],
-    });
+    const share = (arr: number[]) => { const tot = arr.reduce((a, b) => a + b, 0) || 1; return arr.map((n) => (n / tot) * 100); };
+    const groupShare = share(group);
+    const ranked = seriesNames.filter((n) => by.has(n));
+    const people = all ? ranked : ranked.slice(0, RIDGE_LIMIT);
+    const curves = new Map(people.map((p) => [p, share(by.get(p)!)]));
+    const max = Math.max(1, ...groupShare, ...[...curves.values()].flat());
+    const top = 8, left = 150, rowH = RIDGE_ROW;
+    return {
+      people,
+      height: top + people.length * rowH + 44,
+      option: {
+        ...base,
+        animation: false,
+        tooltip: {
+          ...base.tooltip, trigger: 'axis', axisPointer: { type: 'line', lineStyle: { color: t.axis } },
+          formatter: (ps: { seriesName: string; value: number; color: string; dataIndex: number }[]) => {
+            const me = ps.find((p) => p.seriesName !== 'group');
+            if (!me) return '';
+            const h = ps[0].dataIndex;
+            return `<div style="margin-bottom:4px;opacity:.7">${esc(me.seriesName)} · ${HOURS[h]}</div>` +
+              tipRow(me.color, `${me.value.toFixed(1)}%`, 'of their messages') + tipRow(t.muted, `${groupShare[h].toFixed(1)}%`, 'of the group’s');
+          },
+        },
+        axisPointer: { link: [{ xAxisIndex: 'all' }] },
+        // Each row's plot is taller than its slot, so curves overlap the row above, ridgeline-style.
+        grid: people.map((_, i) => ({ left, right: 16, top: top + i * rowH - rowH * 0.6, height: rowH * 1.6 })),
+        xAxis: people.map((_, i) => ({
+          type: 'category', gridIndex: i, data: HOURS, boundaryGap: false,
+          axisLine: { show: i === people.length - 1, lineStyle: { color: t.axis } }, axisTick: { show: false },
+          axisLabel: { show: i === people.length - 1, color: t.muted, fontSize: 10, interval: 2 }, splitLine: { show: false },
+        })),
+        yAxis: people.map((_, i) => ({ type: 'value', gridIndex: i, min: 0, max, show: false })),
+        graphic: people.map((p, i) => ({
+          type: 'text', left: 8, top: top + i * rowH + rowH * 0.2,
+          style: { text: p.length > 20 ? `${p.slice(0, 19)}…` : p, fill: t.ink2, fontSize: 11, fontFamily: 'system-ui, sans-serif' },
+        })),
+        series: people.flatMap((p, i) => [
+          { name: 'group', type: 'line', xAxisIndex: i, yAxisIndex: i, smooth: 0.35, symbol: 'none', silent: true, z: 1, lineStyle: { width: 1, color: t.muted, type: 'dashed' }, data: groupShare },
+          { name: p, type: 'line', xAxisIndex: i, yAxisIndex: i, smooth: 0.35, symbol: 'none', z: 2 + i, lineStyle: { width: 1.5, color: colorOf(p) }, areaStyle: { color: colorOf(p), opacity: 0.45 }, data: curves.get(p) },
+        ]),
+      },
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [q.data, seriesNames, colorOf, t, unit]);
+  }, [q.data, seriesNames, colorOf, t, all]);
 
+  const total = seriesNames.length;
   return (
     <Panel
-      title={unit === 'hour' ? 'Hour of day, by person' : 'Day of week, by person'}
-      actions={<span className="text-[11px] text-ink-3">each row is one person’s own rhythm · click to read</span>}
+      title="When each person talks"
+      actions={
+        <div className="flex items-center gap-3">
+          <span className="text-[11px] text-ink-3">share of each person’s messages by hour · dashed = the group · click to read</span>
+          {total > RIDGE_LIMIT && <button onClick={() => setAll((a) => !a)} className="text-[11px] text-accent">{all ? `Top ${RIDGE_LIMIT}` : `All ${total}`}</button>}
+        </div>
+      }
       bodyClassName="p-2"
     >
       <EChart
@@ -209,10 +280,9 @@ function RhythmByPerson({ unit }: { unit: 'hour' | 'dow' }) {
         height={height}
         dimmed={q.loading}
         on={{
-          click: (p: { value: [number, number, number] }) => {
-            const who = rows[p.value[1]];
-            const cond = unit === 'hour' ? `hour(ts) = ${p.value[0]}` : `isodow(ts) = ${p.value[0] + 1}`;
-            inspect({ title: `${who} · ${labels[p.value[0]]}`, where: `${cond} AND ${seriesWhere(who)}` });
+          click: (p: { seriesName: string; dataIndex: number }) => {
+            if (!people.includes(p.seriesName)) return;
+            inspect({ title: `${p.seriesName} · ${HOURS[p.dataIndex]}`, where: `hour(ts) = ${p.dataIndex} AND ${seriesWhere(p.seriesName)}` });
           },
         }}
       />
@@ -220,170 +290,130 @@ function RhythmByPerson({ unit }: { unit: 'hour' | 'dow' }) {
   );
 }
 
-/** How the daily rhythm shifted over the years (each year sums to 100%). */
-function HourByYear() {
+/** Each person's share of messages sent on weekends, against the group and an even spread (2 of 7 days). */
+function WeekendShare() {
+  const t = useChartTheme();
+  const { seriesNames, seriesWhere, colorOf, inspect } = useConversation();
+  const q = useQuery<{ s: string; n: number; we: number }>(`SELECT sender AS s, count(*) AS n, count(*) FILTER (isodow(ts) >= 6) AS we FROM sel GROUP BY 1 HAVING count(*) >= 20`);
+  const { option, rows } = useMemo(() => {
+    const base = baseOption(t);
+    const data = q.data ?? [];
+    const groupShare = (data.reduce((a, r) => a + r.we, 0) / Math.max(1, data.reduce((a, r) => a + r.n, 0))) * 100;
+    const rows = seriesNames.map((n) => data.find((r) => r.s === n)).filter((r): r is NonNullable<typeof r> => !!r).reverse();
+    const v = rows.map((r) => (r.we / r.n) * 100);
+    return {
+      rows,
+      option: {
+        ...base,
+        grid: { ...base.grid, left: 8, right: 30, top: 24, bottom: 24 },
+        tooltip: {
+          ...base.tooltip, trigger: 'item',
+          formatter: (p: { dataIndex: number }) => {
+            const r = rows[p.dataIndex];
+            return `<div style="font-weight:600;margin-bottom:4px">${esc(r.s)}</div>` + tipRow(colorOf(r.s), `${v[p.dataIndex].toFixed(0)}%`, `of messages on weekends (${fmtInt(r.we)})`) +
+              tipRow(t.muted, `${groupShare.toFixed(0)}%`, 'the group');
+          },
+        },
+        xAxis: { type: 'value', min: 0, max: (m: { max: number }) => Math.ceil(Math.max(m.max, 40) / 10) * 10, ...base.axisCommon, axisLabel: { ...base.axisCommon.axisLabel, formatter: '{value}%' } },
+        yAxis: {
+          type: 'category', data: rows.map((r) => r.s), ...base.axisCommon, axisLine: { show: false },
+          axisLabel: { color: t.ink2, fontSize: rows.length > 30 ? 10 : 11, width: 130, overflow: 'truncate' },
+        },
+        series: [
+          // Lollipop stick from the group's share to the person's.
+          { type: 'bar', stack: 'l', silent: true, itemStyle: { color: 'transparent' }, data: v.map((x) => Math.min(x, groupShare)), barWidth: 2 },
+          { type: 'bar', stack: 'l', silent: true, data: v.map((x, i) => ({ value: Math.abs(x - groupShare), itemStyle: { color: colorOf(rows[i].s), opacity: 0.5 } })), barWidth: 2 },
+          {
+            type: 'scatter', symbolSize: 11, z: 3,
+            data: v.map((x, i) => ({ value: [x, i], itemStyle: { color: colorOf(rows[i].s), borderColor: t.surface, borderWidth: 2 } })),
+            markLine: {
+              silent: true, symbol: 'none',
+              data: [
+                { xAxis: groupShare, lineStyle: { color: t.ink2, type: 'dashed' }, label: { formatter: `group ${groupShare.toFixed(0)}%`, color: t.ink2, fontSize: 10, position: 'end' } },
+                { xAxis: (2 / 7) * 100, lineStyle: { color: t.muted, type: 'dotted' }, label: { formatter: 'even 29%', color: t.muted, fontSize: 10, position: 'start' } },
+              ],
+            },
+          },
+        ],
+      },
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q.data, seriesNames, colorOf, t]);
+  return (
+    <Panel title="Weekend people" actions={<span className="text-[11px] text-ink-3">share of each person’s messages on Sat–Sun · click to read</span>} bodyClassName="p-2">
+      <EChart
+        option={option}
+        height={Math.max(200, rows.length * (rows.length > 30 ? 16 : 24) + 50)}
+        dimmed={q.loading}
+        on={{ click: (p: { dataIndex: number; seriesType: string }) => p.seriesType === 'scatter' && inspect({ title: `${rows[p.dataIndex].s} on weekends`, where: `isodow(ts) >= 6 AND ${seriesWhere(rows[p.dataIndex].s)}` }) }}
+      />
+    </Panel>
+  );
+}
+
+const PARTS = [
+  { name: 'Morning', hours: '5–12h', sql: 'hour(ts) >= 5 AND hour(ts) < 12' },
+  { name: 'Afternoon', hours: '12–18h', sql: 'hour(ts) >= 12 AND hour(ts) < 18' },
+  { name: 'Evening', hours: '18–23h', sql: 'hour(ts) >= 18 AND hour(ts) < 23' },
+  { name: 'Night', hours: '23–5h', sql: 'hour(ts) >= 23 OR hour(ts) < 5' },
+];
+
+/** How the conversation's day is split, period by period (each period sums to 100%). */
+function DayParts() {
   const t = useChartTheme();
   const { inspect } = useConversation();
-  const q = useQuery<{ y: number; h: number; n: number }>(`SELECT year(ts) AS y, hour(ts) AS h, count(*) AS n FROM sel GROUP BY 1, 2`);
+  const q = useQuery<{ b: number; m: number; a: number; e: number; n: number }>(`
+    WITH span_days AS (SELECT date_diff('day', min(ts), max(ts)) AS d FROM sel)
+    SELECT epoch_ms(date_trunc(CASE WHEN (SELECT d FROM span_days) > 3 * 365 THEN 'year' WHEN (SELECT d FROM span_days) > 180 THEN 'quarter' ELSE 'month' END, ts)) AS b,
+           ${PARTS.map((p, i) => `count(*) FILTER (${p.sql}) AS ${'maen'[i]}`).join(', ')}
+    FROM sel GROUP BY 1 ORDER BY 1`);
   const data = q.data ?? [];
-  const years = [...new Set(data.map((r) => r.y))].sort((a, b) => b - a);
+  const grain = data.length > 1 && data[1].b - data[0].b > 300 * DAY ? 'year' : data.length > 1 && data[1].b - data[0].b > 80 * DAY ? 'quarter' : 'month';
+  const label = (ms: number) => {
+    const d = new Date(ms);
+    return grain === 'year' ? String(d.getUTCFullYear()) : grain === 'quarter' ? `Q${Math.floor(d.getUTCMonth() / 3) + 1} ${d.getUTCFullYear()}` : `${['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+  };
   const option = useMemo(() => {
-    const totals = new Map<number, number>();
-    for (const r of data) totals.set(r.y, (totals.get(r.y) ?? 0) + r.n);
-    const cells = data.map((r) => [r.h, years.indexOf(r.y), (r.n / totals.get(r.y)!) * 100] as [number, number, number]);
-    return gridHeatmap(t, {
-      x: HOURS,
-      y: years.map(String),
-      cells,
-      max: quantile(cells.map((c) => c[2]), 0.97),
-      title: (x, y) => `${y} · ${x}`,
-      value: (v) => `${v.toFixed(1)}% of the year`,
-      legend: ['more', 'less'],
-      labelWidth: 40,
-    });
+    const base = baseOption(t);
+    // Darker = later in the day, in both themes.
+    const colors = t.dark ? [t.seq[7], t.seq[6], t.seq[4], t.seq[2]] : [t.seq[2], t.seq[3], t.seq[5], t.seq[7]];
+    const keys = ['m', 'a', 'e', 'n'] as const;
+    return {
+      ...base,
+      grid: { ...base.grid, top: 36 },
+      legend: { top: 0, left: 0, icon: 'rect', itemWidth: 10, itemHeight: 10, textStyle: { color: t.ink2, fontSize: 11 }, data: PARTS.map((p) => p.name) },
+      tooltip: {
+        ...base.tooltip, trigger: 'axis', axisPointer: { type: 'line', lineStyle: { color: t.axis } },
+        formatter: (ps: { seriesName: string; value: number; color: string; dataIndex: number }[]) =>
+          `<div style="margin-bottom:4px;opacity:.7">${esc(label(data[ps[0].dataIndex].b))} · ${fmtInt(data[ps[0].dataIndex].m + data[ps[0].dataIndex].a + data[ps[0].dataIndex].e + data[ps[0].dataIndex].n)} messages</div>` +
+          [...ps].reverse().map((p) => tipRow(p.color, `${p.value.toFixed(0)}%`, `${p.seriesName} (${PARTS.find((x) => x.name === p.seriesName)!.hours})`)).join(''),
+      },
+      xAxis: { type: 'category', data: data.map((r) => label(r.b)), boundaryGap: false, ...base.axisCommon, splitLine: { show: false } },
+      yAxis: { type: 'value', max: 100, ...base.axisCommon, axisLine: { show: false }, axisLabel: { ...base.axisCommon.axisLabel, formatter: '{value}%' } },
+      series: PARTS.map((p, i) => ({
+        name: p.name, type: 'line', stack: 'parts', symbol: 'none', smooth: 0.2,
+        lineStyle: { width: 0 }, areaStyle: { color: colors[i], opacity: 0.95 }, itemStyle: { color: colors[i] },
+        data: data.map((r) => { const tot = r.m + r.a + r.e + r.n || 1; return (r[keys[i]] / tot) * 100; }),
+      })),
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q.data, t]);
   return (
-    <Panel title="Hour of day, by year" actions={<span className="text-[11px] text-ink-3">each row sums to 100%</span>} bodyClassName="p-2">
+    <Panel title={`Parts of the day, by ${grain}`} actions={<span className="text-[11px] text-ink-3">each period sums to 100% · click to read</span>} bodyClassName="p-2">
       <EChart
         option={option}
-        height={Math.max(180, years.length * 22 + 64)}
+        height={260}
         dimmed={q.loading}
         on={{
-          click: (p: { value: [number, number, number] }) => {
-            const y = years[p.value[1]];
-            const h = p.value[0];
-            inspect({ title: `${y} · ${hourLabel(h)}–${hourLabel((h + 1) % 24)}`, where: `year(ts) = ${y} AND hour(ts) = ${h}` });
+          click: (p: { seriesName: string; dataIndex: number }) => {
+            const part = PARTS.find((x) => x.name === p.seriesName)!;
+            const b = data[p.dataIndex].b;
+            const next = data[p.dataIndex + 1]?.b ?? b + (grain === 'year' ? 366 : grain === 'quarter' ? 92 : 31) * DAY;
+            inspect({ title: `${part.name}s · ${label(b)}`, where: `(${part.sql}) AND ts >= ${tsLit(b)} AND ts < ${tsLit(next)}` });
           },
         }}
       />
     </Panel>
-  );
-}
-
-// --- Sessions ------------------------------------------------------------------------
-
-type SessionStats = { sessions: number; median_ms: number; median_n: number; avg_people: number; per_day: number };
-type SessionRow = { sid: number; start_ms: number; end_ms: number; n: number; people: number; starter: string; ender: string };
-
-function SessionsBlock() {
-  const t = useChartTheme();
-  const { seriesSql, seriesNames, colorOf, inspect, conv } = useConversation();
-  const [gap, setGap] = useState<Gap>('30');
-  const cte = sessionsCte(gap, seriesSql);
-
-  const stats = useQuery<SessionStats>(`${cte}
-    SELECT count(*) AS sessions, median(end_ms - start_ms) AS median_ms, median(n) AS median_n, avg(people) AS avg_people,
-           count(*) / count(DISTINCT CAST(epoch_ms(start_ms::BIGINT) AS DATE)) AS per_day
-    FROM sessions`).data?.[0];
-  const bins = useQuery<{ b: number; c: number }>(`${cte}
-    SELECT CASE ${SESSION_BINS.map(([, max], i) => (max === Infinity ? '' : `WHEN end_ms - start_ms < ${max * MINUTE} THEN ${i}`)).join(' ')} ELSE ${SESSION_BINS.length - 1} END AS b,
-           count(*) AS c FROM sessions GROUP BY 1`);
-  const starters = useQuery<{ s: string; started: number; ended: number }>(`${cte}
-    SELECT s, sum(st) AS started, sum(en) AS ended FROM (
-      SELECT starter AS s, 1 AS st, 0 AS en FROM sessions UNION ALL SELECT ender, 0, 1 FROM sessions
-    ) GROUP BY s`);
-  const longest = useQuery<SessionRow>(`${cte} SELECT * FROM sessions ORDER BY n DESC LIMIT 12`);
-
-  const histOption = useMemo(() => {
-    const base = baseOption(t);
-    const counts = SESSION_BINS.map((_, i) => bins.data?.find((r) => r.b === i)?.c ?? 0);
-    const total = counts.reduce((a, b) => a + b, 0);
-    return {
-      ...base,
-      tooltip: {
-        ...base.tooltip,
-        trigger: 'item',
-        formatter: (p: { dataIndex: number; value: number }) =>
-          `<div style="margin-bottom:4px;opacity:.7">${esc(SESSION_BINS[p.dataIndex][0])}</div>` + tipRow(t.series[0], fmtInt(p.value), `sessions · ${fmtPct(p.value / total, 0)}`),
-      },
-      xAxis: { type: 'category', data: SESSION_BINS.map((b) => b[0]), ...base.axisCommon, axisLabel: { ...base.axisCommon.axisLabel, interval: 0 }, splitLine: { show: false } },
-      yAxis: { type: 'value', ...base.axisCommon, axisLine: { show: false } },
-      series: [{ type: 'bar', barMaxWidth: 36, itemStyle: { color: t.series[0], borderRadius: [3, 3, 0, 0] }, data: counts }],
-    };
-  }, [bins.data, t]);
-
-  const startOption = useMemo(() => {
-    const base = baseOption(t);
-    const rows = seriesNames.map((s) => starters.data?.find((r) => r.s === s)).filter((r): r is NonNullable<typeof r> => !!r);
-    const total = rows.reduce((n, r) => n + r.started, 0);
-    const ordered = [...rows].reverse();
-    return {
-      ...base,
-      grid: { ...base.grid, right: 64 },
-      tooltip: {
-        ...base.tooltip,
-        trigger: 'item',
-        formatter: (p: { dataIndex: number }) => {
-          const r = ordered[p.dataIndex];
-          return `<div style="margin-bottom:4px;font-weight:600">${esc(r.s)}</div>` +
-            tipRow(colorOf(r.s), fmtInt(r.started), `sessions started · ${fmtPct(r.started / total, 0)}`) +
-            tipRow(t.ink2, fmtInt(r.ended), 'sessions ended (had the last word)');
-        },
-      },
-      xAxis: { type: 'value', ...base.axisCommon, axisLabel: { show: false }, splitLine: { show: false } },
-      yAxis: { type: 'category', data: ordered.map((r) => r.s), ...base.axisCommon, axisLine: { show: false }, axisLabel: { color: t.ink2, fontSize: 11, width: 120, overflow: 'truncate' } },
-      series: [{
-        type: 'bar',
-        barMaxWidth: 16,
-        data: ordered.map((r) => ({ value: r.started, itemStyle: { color: colorOf(r.s), borderRadius: [0, 3, 3, 0] } })),
-        label: { show: true, position: 'right', color: t.ink2, fontSize: 11, formatter: (p: { value: number }) => fmtPct(p.value / total, 0) },
-      }],
-    };
-  }, [starters.data, seriesNames, colorOf, t]);
-
-  const tf = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'UTC' });
-  const startRows = seriesNames.filter((s) => starters.data?.some((r) => r.s === s)).length;
-
-  return (
-    <>
-      <div className="flex items-center gap-3 pt-2">
-        <h2 className="text-[13px] font-semibold">Sessions</h2>
-        <span className="text-ink-3">A session is a run of messages with no pause longer than</span>
-        <Segmented value={gap} options={GAPS.map(([v, l]) => [v, l] as [Gap, string])} onChange={setGap} />
-      </div>
-      <div className="grid grid-cols-2 gap-3 @5xl:grid-cols-4">
-        <Stat label="Sessions" value={fmtInt(stats?.sessions)} sub={stats ? `${stats.per_day.toFixed(1)} per active day` : undefined} />
-        <Stat label="Typical length" value={fmtDuration(stats?.median_ms)} sub="median session" />
-        <Stat label="Typical size" value={stats ? `${fmtInt(Math.round(stats.median_n))} messages` : '–'} sub="median session" />
-        <Stat label="People per session" value={stats ? stats.avg_people.toFixed(1) : '–'} sub={conv.isGroup ? `of ${conv.participantCount} members` : 'on average'} />
-      </div>
-      <div className="grid grid-cols-1 gap-3 @4xl:grid-cols-2">
-        <Panel title="Session length" bodyClassName="p-2">
-          <EChart option={histOption} height={240} dimmed={bins.loading} />
-        </Panel>
-        <Panel title="Who starts sessions" actions={<span className="text-[11px] text-ink-3">hover for who ends them</span>} bodyClassName="p-2">
-          <EChart option={startOption} height={Math.max(200, startRows * 24 + 24)} dimmed={starters.loading} />
-        </Panel>
-      </div>
-      <Panel title="Biggest sessions" actions={<span className="text-[11px] text-ink-3">click to read</span>}>
-        <table className={`w-full border-collapse text-[12px] ${longest.loading ? 'opacity-50' : ''}`}>
-          <thead>
-            <tr className="text-ink-3">
-              <th className="border-b border-line px-3 py-1.5 text-left font-medium">Started</th>
-              <th className="border-b border-line px-3 py-1.5 text-right font-medium">Length</th>
-              <th className="border-b border-line px-3 py-1.5 text-right font-medium">Messages</th>
-              <th className="border-b border-line px-3 py-1.5 text-right font-medium">People</th>
-              <th className="border-b border-line px-3 py-1.5 text-left font-medium">Started by</th>
-              <th className="border-b border-line px-3 py-1.5 text-left font-medium">Last word</th>
-            </tr>
-          </thead>
-          <tbody>
-            {longest.data?.map((r) => (
-              <tr key={r.sid} className="cursor-pointer hover:bg-surface-2"
-                onClick={() => inspect({ title: `Session · ${tf.format(new Date(r.start_ms))}`, where: `ts >= ${tsLit(r.start_ms)} AND ts <= ${tsLit(r.end_ms)}` })}>
-                <td className="num border-b border-line/60 px-3 py-1">{tf.format(new Date(r.start_ms))}</td>
-                <td className="num border-b border-line/60 px-3 text-right">{fmtDuration(r.end_ms - r.start_ms)}</td>
-                <td className="num border-b border-line/60 px-3 text-right">{fmtInt(r.n)}</td>
-                <td className="num border-b border-line/60 px-3 text-right">{r.people}</td>
-                <td className="border-b border-line/60 px-3"><Person name={r.starter} /></td>
-                <td className="border-b border-line/60 px-3"><Person name={r.ender} /></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </Panel>
-    </>
   );
 }
 
@@ -415,7 +445,11 @@ function StreaksAndSilences() {
   const th = 'border-b border-line px-3 py-1.5 font-medium';
 
   return (
-    <div className="grid grid-cols-1 gap-3 @4xl:grid-cols-2">
+    <>
+    <ActiveStrip silences={silences.data ?? []} />
+    <details className="group rounded-lg border border-line bg-surface">
+      <summary className="cursor-pointer select-none px-3 py-2 text-[12px] font-medium text-ink-2 hover:text-ink">Streak and silence tables</summary>
+    <div className="grid grid-cols-1 gap-3 p-3 pt-0 @4xl:grid-cols-2">
       <Panel title="Longest streaks" actions={<span className="text-[11px] text-ink-3">consecutive days with messages · click to filter to it</span>}>
         <table className={`w-full border-collapse text-[12px] ${streaks.loading ? 'opacity-50' : ''}`}>
           <thead>
@@ -466,6 +500,62 @@ function StreaksAndSilences() {
         </table>
       </Panel>
     </div>
+    </details>
+    </>
+  );
+}
+
+/**
+ * Every day of the selection as a thin bar (a barcode of activity), with the
+ * longest silences shaded and labelled where they happened.
+ */
+function ActiveStrip({ silences }: { silences: { before_ms: number; after_ms: number; gap: number }[] }) {
+  const t = useChartTheme();
+  const { inspect } = useConversation();
+  const q = useQuery<{ d: number; n: number }>(`
+    WITH r AS (SELECT min(ts)::DATE AS a, max(ts)::DATE AS b FROM sel),
+    days AS (SELECT unnest(range(r.a::TIMESTAMP, r.b::TIMESTAMP + INTERVAL 1 DAY, INTERVAL 1 DAY)) AS d FROM r),
+    c AS (SELECT ts::DATE::TIMESTAMP AS d, count(*) AS n FROM sel GROUP BY 1)
+    SELECT epoch_ms(days.d) AS d, coalesce(c.n, 0) AS n FROM days LEFT JOIN c USING (d) ORDER BY 1`);
+  const data = q.data ?? [];
+  const option = useMemo(() => {
+    const base = baseOption(t);
+    const cap = quantile(data.map((r) => r.n).filter(Boolean), 0.95);
+    const labels = data.map((r) => fmtDate(r.d));
+    const idx = (ms: number) => Math.max(0, Math.min(data.length - 1, Math.round((ms - (data[0]?.d ?? 0)) / DAY)));
+    const gaps = silences.filter((s) => s.gap >= 2 * DAY).slice(0, 6);
+    return {
+      ...base,
+      grid: { left: 8, right: 8, top: 26, bottom: 22, containLabel: false },
+      tooltip: {
+        ...base.tooltip, trigger: 'axis', axisPointer: { type: 'line', lineStyle: { color: t.axis } },
+        formatter: (ps: { dataIndex: number }[]) => `${esc(longDay.format(new Date(data[ps[0].dataIndex].d)))}<br/>${tipRow(t.series[0], fmtInt(data[ps[0].dataIndex].n), 'messages')}`,
+      },
+      xAxis: { type: 'category', data: labels, ...base.axisCommon, axisLabel: { ...base.axisCommon.axisLabel, interval: Math.max(0, Math.floor(data.length / 8)) }, splitLine: { show: false } },
+      yAxis: { type: 'value', max: cap, show: false },
+      series: [{
+        type: 'bar', large: data.length > 1500, barCategoryGap: 0,
+        itemStyle: { color: t.series[0] },
+        data: data.map((r) => Math.min(r.n, cap)),
+        markArea: {
+          silent: true,
+          itemStyle: { color: t.dark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.05)' },
+          label: { color: t.ink2, fontSize: 10, position: 'top' },
+          data: gaps.map((g) => [{ xAxis: idx(g.before_ms), name: fmtDuration(g.gap) }, { xAxis: idx(g.after_ms) }]),
+        },
+      }],
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q.data, silences, t]);
+  return (
+    <Panel title="Every day, and the silences" actions={<span className="text-[11px] text-ink-3">one bar per day · shaded = the longest silences · click a day to read</span>} bodyClassName="p-2">
+      <EChart
+        option={option}
+        height={120}
+        dimmed={q.loading}
+        on={{ click: (p: { dataIndex: number }) => { const d = data[p.dataIndex]; if (d?.n) inspect({ title: longDay.format(new Date(d.d)), where: `ts::DATE = DATE '${new Date(d.d).toISOString().slice(0, 10)}'` }); } }}
+      />
+    </Panel>
   );
 }
 
@@ -476,12 +566,13 @@ export function Activity() {
       <CalendarPanel />
       <div className="grid grid-cols-1 gap-3 @4xl:grid-cols-2">
         <WeekHourHeatmap />
-        <RhythmByPerson unit="hour" />
-        <RhythmByPerson unit="dow" />
-        <HourByYear />
+        <DayParts />
+      </div>
+      <div className="grid grid-cols-1 gap-3 @5xl:grid-cols-[3fr_2fr]">
+        <HourRidgeline />
+        <WeekendShare />
       </div>
       <StreaksAndSilences />
-      <SessionsBlock />
     </div>
   );
 }

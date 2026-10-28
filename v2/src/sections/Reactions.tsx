@@ -3,9 +3,7 @@
 // where either side (reactor or author) is selected.
 import { useMemo, useState } from 'react';
 import { pairPeopleSql, useConversation } from '../app/ConversationProvider';
-import { matrixPeople } from '../app/relations';
 import { EChart } from '../charts/EChart';
-import { gridHeatmap, personHeatmap, quantile, rowHeight } from '../charts/heatmap';
 import { baseOption, esc, tipRow, useChartTheme } from '../charts/theme';
 import { lit } from '../db/duckdb';
 import { useQuery } from '../db/useQuery';
@@ -86,46 +84,79 @@ function TopReactions() {
   );
 }
 
-function ReactionByPerson() {
+const PRINT_EMOJI = 6;
+
+/**
+ * Each person's reaction fingerprint: the share of their reactions going to
+ * each of the group's most used emoji (plus "other"), as one 100% bar.
+ */
+function ReactionFingerprints() {
   const t = useChartTheme();
   const where = useWhere();
-  const { conv, inspect, colorOf } = useConversation();
-  const { names, fold } = matrixPeople(conv);
-  const top = useQuery<{ reaction: string }>(`SELECT reaction FROM span_reactions WHERE ${where} GROUP BY 1 ORDER BY count(*) DESC LIMIT 10`).data ?? [];
+  const { seriesNames, colorOf, inspect } = useConversation();
+  const top = useQuery<{ reaction: string }>(`SELECT reaction FROM span_reactions WHERE ${where} GROUP BY 1 ORDER BY count(*) DESC LIMIT ${PRINT_EMOJI}`).data ?? [];
   const emojis = top.map((r) => r.reaction);
-  const q = useQuery<{ s: string; reaction: string; n: number }>(
-    emojis.length
-      ? `SELECT ${fold('actor')} AS s, reaction, count(*) AS n FROM span_reactions
-         WHERE ${where} AND reaction IN (${emojis.map(lit).join(', ')}) GROUP BY 1, 2`
-      : null,
-  );
-  const rows = [...names].reverse();
-  const option = useMemo(() => {
-    const totals = new Map<string, number>();
-    for (const r of q.data ?? []) totals.set(r.s, (totals.get(r.s) ?? 0) + r.n);
-    const cells = (q.data ?? [])
-      .map((r) => [emojis.indexOf(r.reaction), rows.indexOf(r.s), (r.n / totals.get(r.s)!) * 100] as [number, number, number])
-      .filter((c) => c[0] >= 0 && c[1] >= 0);
-    const o = gridHeatmap(t, {
-      x: emojis, y: rows, cells, yName: 'who reacts ↓', yColors: rows.map(colorOf),
-      max: quantile(cells.map((c) => c[2]), 0.97),
-      title: (x, y) => `${y} · ${x}`,
-      value: (v) => `${v.toFixed(0)}% of their reactions`,
-      legend: ['more', 'less'],
-    });
-    return { ...o, xAxis: { ...o.xAxis, axisLabel: { ...o.xAxis.axisLabel, fontSize: 16, color: t.ink } } };
+  const q = useQuery<{ s: string; reaction: string; n: number }>(`SELECT actor AS s, reaction, count(*) AS n FROM span_reactions WHERE ${where} GROUP BY 1, 2`);
+  const { option, rows } = useMemo(() => {
+    const base = baseOption(t);
+    const by = new Map<string, Map<string, number>>();
+    for (const r of q.data ?? []) {
+      if (!by.has(r.s)) by.set(r.s, new Map());
+      by.get(r.s)!.set(r.reaction, r.n);
+    }
+    const rows = seriesNames.filter((n) => [...(by.get(n)?.values() ?? [])].reduce((a, b) => a + b, 0) >= 10).reverse();
+    const cats = [...emojis, 'other'];
+    // Emoji aren't people: shades of one hue, most used darkest, so the person colours stay meaningful.
+    const ramp = t.dark ? [t.seq[7], t.seq[6], t.seq[5], t.seq[4], t.seq[3], t.seq[2], t.grid] : [t.seq[7], t.seq[6], t.seq[5], t.seq[4], t.seq[3], t.seq[2], t.grid];
+    const share = (name: string, cat: string) => {
+      const m = by.get(name)!;
+      const tot = [...m.values()].reduce((a, b) => a + b, 0);
+      const v = cat === 'other' ? [...m].filter(([e]) => !emojis.includes(e)).reduce((a, [, n]) => a + n, 0) : m.get(cat) ?? 0;
+      return { pct: (v / tot) * 100, n: v, tot };
+    };
+    return {
+      rows,
+      option: {
+        ...base,
+        grid: { ...base.grid, left: 8, right: 16, top: 30, bottom: 8 },
+        legend: { top: 0, left: 0, itemWidth: 10, itemHeight: 10, icon: 'rect', textStyle: { color: t.ink2, fontSize: 13 }, data: cats },
+        tooltip: {
+          ...base.tooltip, trigger: 'item',
+          formatter: (p: { seriesName: string; dataIndex: number }) => {
+            const sh = share(rows[p.dataIndex], p.seriesName);
+            return `<div style="font-weight:600;margin-bottom:4px">${esc(rows[p.dataIndex])}</div>` + tipRow(t.series[0], `${sh.pct.toFixed(0)}%`, `${p.seriesName} · ${fmtInt(sh.n)} of ${fmtInt(sh.tot)} reactions`);
+          },
+        },
+        xAxis: { type: 'value', max: 100, show: false },
+        yAxis: {
+          type: 'category', data: rows, ...base.axisCommon, axisLine: { show: false },
+          axisLabel: {
+            color: t.ink2, fontSize: rows.length > 30 ? 10 : 11, width: 130, overflow: 'truncate',
+            formatter: (v: string, i: number) => `{d${i}|}  ${v}`,
+            rich: Object.fromEntries(rows.map((r, i) => [`d${i}`, { backgroundColor: colorOf(r), width: 8, height: 8, borderRadius: 4 }])),
+          },
+        },
+        series: cats.map((c, ci) => ({
+          name: c, type: 'bar', stack: 'fp', barMaxWidth: 18,
+          itemStyle: { color: ramp[ci], borderColor: t.surface, borderWidth: 1 },
+          label: { show: true, color: ci < 3 ? '#fff' : t.ink, fontSize: 12, formatter: (p: { value: number }) => (p.value >= 9 && c !== 'other' ? c : '') },
+          data: rows.map((r) => share(r, c).pct),
+        })),
+      },
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [q.data, t, emojis.join(), names.join(), colorOf]);
+  }, [q.data, emojis.join(), seriesNames, colorOf, t]);
   return (
-    <Panel title="Who uses which reaction" actions={<span className="text-[11px] text-ink-3">each row sums to 100% over these 10 · click to read</span>} bodyClassName="p-2">
+    <Panel title="Reaction fingerprints" actions={<span className="text-[11px] text-ink-3">how each person reacts · 10+ reactions given · click to read</span>} bodyClassName="p-2">
       <EChart
         option={option}
-        height={Math.max(220, rows.length * rowHeight(rows.length) + 90)}
+        height={Math.max(220, rows.length * (rows.length > 30 ? 16 : 24) + 50)}
         dimmed={q.loading}
         on={{
-          click: (p: { value: [number, number, number] }) => {
-            const [e, who] = [emojis[p.value[0]], rows[p.value[1]]];
-            inspect({ title: `${who} reacting ${e}`, where: `message_id IN (SELECT message_id FROM span_reactions WHERE actor = ${lit(who)} AND reaction = ${lit(e)})`, from: 'span' });
+          click: (p: { seriesName: string; dataIndex: number }) => {
+            const who = rows[p.dataIndex];
+            const cond = p.seriesName === 'other' ? `reaction NOT IN (${emojis.map(lit).join(', ')})` : `reaction = ${lit(p.seriesName)}`;
+            inspect({ title: `${who} reacting ${p.seriesName}`, where: `message_id IN (SELECT message_id FROM span_reactions WHERE actor = ${lit(who)} AND ${cond})`, from: 'span' });
           },
         }}
       />
@@ -285,7 +316,18 @@ function GenerousVsAppreciated({ openPerson }: { openPerson: (name: string) => v
     const base = baseOption(t);
     const maxMsgs = Math.max(1, ...rows.map((r) => r.msgs));
     const labelFloor = [...rows].sort((a, b) => b.msgs - a.msgs)[Math.min(14, rows.length - 1)]?.msgs ?? 0;
+    // Quadrants split at the group's medians.
+    const med = (xs: number[]) => { const v = [...xs].sort((a, b) => a - b); return v.length ? v[Math.floor(v.length / 2)] : 0; };
+    const mx = med(rows.map((r) => (r.given / r.msgs) * 100));
+    const my = med(rows.map((r) => (r.received / r.msgs) * 100));
+    const corner = (text: string, pos: Record<string, number | string>) => ({ type: 'text', ...pos, style: { text, fill: t.muted, fontSize: 11, fontWeight: 600 } });
     return {
+      graphic: rows.length >= 4 ? [
+        corner('Stars: get a lot, give little', { left: 60, top: 30 }),
+        corner('Life of the party: give and get', { right: 30, top: 30 }),
+        corner('Quiet ones', { left: 60, bottom: 34 }),
+        corner('Fans: give more than they get', { right: 30, bottom: 34 }),
+      ] : [],
       ...base,
       grid: { ...base.grid, left: 16, right: 24, top: 24, bottom: 24 },
       tooltip: {
@@ -311,6 +353,10 @@ function GenerousVsAppreciated({ openPerson }: { openPerson: (name: string) => v
           label: { show: r.msgs >= labelFloor, position: 'right', color: t.ink2, fontSize: 11, formatter: r.s.split(' ')[0] },
         })),
         emphasis: { scale: 1.15 },
+        markLine: rows.length >= 4 ? {
+          silent: true, symbol: 'none', lineStyle: { color: t.axis, type: 'dashed' }, label: { show: false },
+          data: [{ xAxis: mx }, { yAxis: my }],
+        } : undefined,
       }],
     };
   }, [rows, t, colorOf]);
@@ -321,32 +367,54 @@ function GenerousVsAppreciated({ openPerson }: { openPerson: (name: string) => v
   );
 }
 
-function RateByYear() {
-  const t = useChartTheme();
-  const { seriesNames, colorOf, filters } = useConversation();
+/** Reactions received per 100 messages, year by year, one small chart per person. */
+function RateByYear({ openPerson }: { openPerson: (name: string) => void }) {
+  const { seriesNames, filters } = useConversation();
   const q = useQuery<{ s: string; y: number; msgs: number; got: number }>(`
     SELECT sender AS s, year(ts) AS y, count(*) AS msgs, sum(n_reactions) AS got FROM span
-    WHERE ${pairPeopleSql(filters, 'sender', 'sender')} GROUP BY 1, 2 HAVING count(*) >= 20`);
-  const { option, height } = useMemo(() => {
-    const data = q.data ?? [];
-    const years = [...new Set(data.map((r) => r.y))].sort();
-    const values = new Map<string, number[]>();
-    for (const r of data) {
-      let arr = values.get(r.s);
-      if (!arr) values.set(r.s, (arr = new Array(years.length).fill(null)));
-      arr[years.indexOf(r.y)] = (r.got / r.msgs) * 100;
-    }
-    return personHeatmap(t, {
-      people: seriesNames, colorOf, x: years.map(String), values,
-      title: (x, p) => `${p} · ${x}`,
-      value: (v) => `${v.toFixed(1)} reactions per 100 messages`,
-      legend: ['more', 'less'],
-    });
-  }, [q.data, seriesNames, colorOf, t]);
+    WHERE ${pairPeopleSql(filters, 'sender', 'sender')} GROUP BY 1, 2`);
+  const data = q.data ?? [];
+  const years = [...new Set(data.map((r) => r.y))].sort();
+  const cards = seriesNames
+    .map((name) => {
+      const mine = data.filter((r) => r.s === name);
+      const msgs = mine.reduce((a, r) => a + r.msgs, 0);
+      const got = mine.reduce((a, r) => a + r.got, 0);
+      // Years with under 20 messages would make the line jumpy; they show as gaps.
+      const rates = years.map((y) => { const r = mine.find((x) => x.y === y); return r && r.msgs >= 20 ? (r.got / r.msgs) * 100 : 0; });
+      return { name, msgs, rate: msgs ? (got / msgs) * 100 : 0, rates };
+    })
+    .filter((c) => c.msgs >= 20);
+  const max = Math.max(1, ...cards.flatMap((c) => c.rates));
   return (
-    <Panel title="Reactions received per 100 messages, by year" actions={<span className="text-[11px] text-ink-3">years with 20+ messages</span>} bodyClassName="p-2">
-      <EChart option={option} height={Math.max(340, height)} dimmed={q.loading} />
+    <Panel title="Reactions per 100 messages, year by year" actions={<span className="text-[11px] text-ink-3">{years[0]}–{years[years.length - 1]} · same scale for everyone · click for profile</span>}>
+      <div className={`grid grid-cols-2 gap-px bg-line @3xl:grid-cols-3 ${q.loading ? 'opacity-50' : ''}`}>
+        {cards.map((c) => (
+          <button key={c.name} onClick={() => openPerson(c.name)} className="min-w-0 bg-surface p-2.5 text-left hover:bg-surface-2">
+            <div className="flex items-center gap-1.5">
+              <Badge name={c.name} size={16} />
+              <span className="min-w-0 flex-1 truncate text-[12px] font-medium">{c.name}</span>
+              <span className="num text-[11px] text-ink-2">{c.rate.toFixed(1)}</span>
+            </div>
+            <div className="mt-1.5"><ScaledSpark values={c.rates} max={max} name={c.name} /></div>
+          </button>
+        ))}
+      </div>
     </Panel>
+  );
+}
+
+function ScaledSpark({ values, max, name }: { values: number[]; max: number; name: string }) {
+  const { colorOf } = useConversation();
+  const W = 200, H = 28;
+  const w = W / Math.max(1, values.length);
+  return (
+    <svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="block" aria-hidden>
+      {values.map((v, i) => {
+        const h = v ? Math.max(1.5, (v / max) * H) : 0;
+        return <rect key={i} x={i * w + 0.5} y={H - h} width={Math.max(1, w - 1.5)} height={h} rx={1} fill={colorOf(name)} />;
+      })}
+    </svg>
   );
 }
 
@@ -407,11 +475,11 @@ export function Reactions({ openPerson }: { openPerson: (name: string) => void }
       </div>
       <div className="grid grid-cols-1 gap-3 @5xl:grid-cols-[2fr_3fr]">
         <TopReactions />
-        <ReactionByPerson />
+        <ReactionFingerprints />
       </div>
       <div className="grid grid-cols-1 gap-3 @4xl:grid-cols-2">
         <GenerousVsAppreciated openPerson={openPerson} />
-        <RateByYear />
+        <RateByYear openPerson={openPerson} />
       </div>
       <MostReacted />
     </div>

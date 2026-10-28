@@ -6,7 +6,7 @@ import { useConversation } from '../app/ConversationProvider';
 import { matrixPeople } from '../app/relations';
 import { tokensSql, useExcludedWords, useWordIndex, wordFilterSql } from '../app/words';
 import { EChart } from '../charts/EChart';
-import { personHeatmap } from '../charts/heatmap';
+import { personBoxplot, type Quantiles } from '../charts/shapes';
 import { baseOption, esc, legend, tipRow, useChartTheme } from '../charts/theme';
 import { lit } from '../db/duckdb';
 import { useQuery } from '../db/useQuery';
@@ -323,32 +323,25 @@ function WordTrends({ seed }: { seed: string[] }) {
 
 // --- Length, emoji, links ---------------------------------------------------------------------
 
-const LENGTHS: [string, number][] = [['1', 1], ['2–3', 3], ['4–7', 7], ['8–15', 15], ['16–31', 31], ['32+', Infinity]];
 
+/** Words per text message, as a distribution per person (longest typical message on top). */
 function MessageLength() {
   const t = useChartTheme();
-  const { seriesNames, colorOf } = useConversation();
-  const q = useQuery<{ s: string; b: number; n: number }>(`
-    SELECT sender AS s,
-           CASE ${LENGTHS.filter(([, m]) => m !== Infinity).map(([, m], i) => `WHEN words <= ${m} THEN ${i}`).join(' ')} ELSE ${LENGTHS.length - 1} END AS b,
-           count(*) AS n
-    FROM sel WHERE kind = 'text' AND words > 0 GROUP BY 1, 2`);
-  const { option, height } = useMemo(() => {
-    const values = new Map<string, number[]>();
-    for (const r of q.data ?? []) {
-      let arr = values.get(r.s);
-      if (!arr) values.set(r.s, (arr = new Array(LENGTHS.length).fill(0)));
-      arr[r.b] = r.n;
-    }
-    return personHeatmap(t, {
-      people: seriesNames, colorOf, x: LENGTHS.map((l) => `${l[0]} words`), values, rowShare: true,
-      title: (x, p) => `${p} · ${x}`,
-      value: (v) => `${v.toFixed(0)}% of their text messages`,
-      legend: ['more', 'less'],
-    });
-  }, [q.data, seriesNames, colorOf, t]);
+  const { colorOf } = useConversation();
+  const q = useQuery<{ s: string; n: number; p5: number; q1: number; med: number; q3: number; p95: number }>(`
+    SELECT sender AS s, count(*) AS n,
+           quantile_cont(words, 0.05) AS p5, quantile_cont(words, 0.25) AS q1, median(words) AS med,
+           quantile_cont(words, 0.75) AS q3, quantile_cont(words, 0.95) AS p95
+    FROM sel WHERE kind = 'text' AND words > 0 GROUP BY 1 HAVING count(*) >= 20 ORDER BY med DESC, q3 DESC`);
+  const { option, height } = useMemo(
+    () => personBoxplot(t, {
+      rows: (q.data ?? []).map((r) => ({ name: r.s, n: r.n, q: [r.p5, r.q1, r.med, r.q3, r.p95].map((v) => Math.max(1, v)) as Quantiles })),
+      colorOf, format: (v) => `${Math.round(v)} words`, unit: 'length', log: true, axisName: 'words per message →',
+    }),
+    [q.data, t, colorOf],
+  );
   return (
-    <Panel title="Message length" actions={<span className="text-[11px] text-ink-3">each row is one person’s text messages</span>} bodyClassName="p-2">
+    <Panel title="Message length" actions={<span className="text-[11px] text-ink-3">box = middle half · line = median · whiskers 5–95% · text messages</span>} bodyClassName="p-2">
       <EChart option={option} height={height} dimmed={q.loading} />
     </Panel>
   );

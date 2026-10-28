@@ -24,13 +24,37 @@ export function Panel({ title, actions, children, className = '', bodyClassName 
   );
 }
 
-export function Stat({ label, value, sub }: { label: string; value: ReactNode; sub?: ReactNode }) {
+/**
+ * A headline number. Optional `trend` draws a tiny line of the metric over the
+ * selection; optional `delta` is the change vs the previous period of equal
+ * length (a fraction), shown neutrally since "more" isn't always "better".
+ */
+export function Stat({ label, value, sub, trend, delta }: { label: string; value: ReactNode; sub?: ReactNode; trend?: number[]; delta?: number | null }) {
   return (
     <div className="min-w-0 rounded-lg border border-line bg-surface px-3 py-2.5">
-      <div className="text-[11px] font-medium uppercase tracking-wide text-ink-3">{label}</div>
+      <div className="flex items-center gap-2">
+        <div className="min-w-0 flex-1 truncate text-[11px] font-medium uppercase tracking-wide text-ink-3">{label}</div>
+        {delta != null && Number.isFinite(delta) && (
+          <span className="num shrink-0 rounded bg-surface-2 px-1 text-[10px] font-medium text-ink-2" title="vs the previous period of the same length">
+            {delta >= 0 ? '▲' : '▼'} {Math.abs(delta * 100).toFixed(Math.abs(delta) < 0.1 ? 1 : 0)}%
+          </span>
+        )}
+      </div>
       <div className="num mt-0.5 truncate text-[20px] font-semibold leading-tight">{value}</div>
+      {trend && trend.length > 1 && <TrendLine values={trend} />}
       {sub && <div className="num mt-0.5 truncate text-[11px] text-ink-3">{sub}</div>}
     </div>
+  );
+}
+
+function TrendLine({ values }: { values: number[] }) {
+  const max = Math.max(1e-9, ...values), min = Math.min(...values);
+  const W = 100, H = 18;
+  const pts = values.map((v, i) => `${(i / (values.length - 1)) * W},${H - 2 - ((v - min) / (max - min || 1)) * (H - 4)}`).join(' ');
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="mt-1 block h-[18px] w-full overflow-visible" aria-hidden>
+      <polyline points={pts} fill="none" stroke="var(--color-accent)" strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
+    </svg>
   );
 }
 

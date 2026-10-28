@@ -1,18 +1,20 @@
 // Overview: volumes and who carries the conversation.
 // Click any mark to read its messages in the inspector; ⇧-click filters.
 import type { ECharts } from 'echarts';
-import { useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { useConversation } from '../app/ConversationProvider';
 import { EChart } from '../charts/EChart';
-import { gridHeatmap, rowHeight } from '../charts/heatmap';
+import { bumpChart, ranksPerPeriod } from '../charts/shapes';
 import { baseOption, esc, legend, tipRow, useChartTheme } from '../charts/theme';
 import { lit } from '../db/duckdb';
 import { useQuery } from '../db/useQuery';
 import { fmtCompact, fmtDate, fmtInt, fmtPct } from '../lib/format';
-import { DAY, isoDay, MONTHS, utc } from '../lib/time';
+import { DAY, isoDay, MONTHS, tsLit, utc } from '../lib/time';
 import { Panel, Segmented, Stat } from '../ui/primitives';
 import { Sparkline } from '../ui/Sparkline';
 import { Badge } from '../ui/Badge';
+import { Play } from 'lucide-react';
+import { RankRace } from './RankRace';
 
 type Grain = 'day' | 'week' | 'month' | 'quarter' | 'year';
 const GRAINS: Grain[] = ['day', 'week', 'month', 'quarter', 'year'];
@@ -77,27 +79,36 @@ type Kpis = {
   reactions: number; calls: number; call_secs: number; first_ts: number | null; last_ts: number | null;
 };
 
+const KPI_SQL = `count(*) AS messages, count(*) FILTER (is_me) AS mine, count(DISTINCT ts::DATE) AS active_days,
+  count(DISTINCT sender) AS senders, coalesce(sum(words), 0) AS words,
+  count(*) FILTER (kind IN ('photo','video','gif','sticker','audio','file')) AS media,
+  coalesce(sum(n_reactions), 0) AS reactions, count(*) FILTER (kind = 'call') AS calls,
+  coalesce(sum(call_duration), 0) AS call_secs, epoch_ms(min(ts)) AS first_ts, epoch_ms(max(ts)) AS last_ts`;
+
 function KpiRow() {
-  const { conv } = useConversation();
-  const k = useQuery<Kpis>(`
-    SELECT count(*) AS messages, count(*) FILTER (is_me) AS mine, count(DISTINCT ts::DATE) AS active_days,
-           count(DISTINCT sender) AS senders, coalesce(sum(words), 0) AS words,
-           count(*) FILTER (kind IN ('photo','video','gif','sticker','audio','file')) AS media,
-           coalesce(sum(n_reactions), 0) AS reactions, count(*) FILTER (kind = 'call') AS calls,
-           coalesce(sum(call_duration), 0) AS call_secs, epoch_ms(min(ts)) AS first_ts, epoch_ms(max(ts)) AS last_ts
-    FROM sel`).data?.[0];
+  const { conv, filters } = useConversation();
+  const [from, to] = useSelectedRange();
+  const k = useQuery<Kpis>(`SELECT ${KPI_SQL} FROM sel`).data?.[0];
+  // With a date filter, compare to the period of the same length just before it.
+  const ranged = !!(filters.from || filters.to);
+  const len = to - from + 1;
+  const prev = useQuery<Kpis>(ranged ? `SELECT ${KPI_SQL} FROM ctx WHERE ts >= ${tsLit(from - len)} AND ts < ${tsLit(from)}` : null).data?.[0];
+  const unit = (to - from) / DAY > 120 ? 'month' : 'week';
+  const trend = useQuery<{ b: number } & Kpis>(`SELECT epoch_ms(date_trunc('${unit}', ts)) AS b, ${KPI_SQL} FROM sel GROUP BY 1 ORDER BY 1`).data ?? [];
+  const series = (key: keyof Kpis) => trend.map((r) => Number(r[key] ?? 0));
+  const delta = (key: keyof Kpis) => (ranged && prev && Number(prev[key]) > 0 && k ? Number(k[key]) / Number(prev[key]) - 1 : null);
   const span = k?.first_ts != null && k.last_ts != null ? Math.floor((k.last_ts - k.first_ts) / DAY) + 1 : null;
   const hasMe = conv.people.some((p) => p.isMe);
   return (
     <div className="grid grid-cols-4 gap-3 @5xl:grid-cols-8">
-      <Stat label="Messages" value={fmtInt(k?.messages)} sub={k && k.active_days ? `${(k.messages / k.active_days).toFixed(1)} per active day` : undefined} />
-      <Stat label="Active days" value={fmtInt(k?.active_days)} sub={k && span ? `${fmtPct(k.active_days / span, 0)} of ${fmtInt(span)} days` : undefined} />
-      <Stat label="People" value={fmtInt(k?.senders)} sub={`of ${fmtInt(conv.participantCount)} members`} />
-      <Stat label="Words" value={fmtCompact(k?.words)} sub={k && k.messages ? `${(k.words / k.messages).toFixed(1)} per message` : undefined} />
-      <Stat label="Media" value={fmtInt(k?.media)} sub={k && k.messages ? `${fmtPct(k.media / k.messages)} of messages` : undefined} />
-      <Stat label="Reactions" value={fmtInt(k?.reactions)} sub={k && k.messages ? `${((k.reactions / k.messages) * 100).toFixed(1)} per 100 messages` : undefined} />
-      <Stat label="Calls" value={fmtInt(k?.calls)} sub={k ? `${(k.call_secs / 3600).toFixed(1)} h in total` : undefined} />
-      <Stat label="Your share" value={hasMe && k?.messages ? fmtPct(k.mine / k.messages) : '–'} sub={hasMe ? `${fmtInt(k?.mine)} sent by you` : 'you are not in this one'} />
+      <Stat label="Messages" value={fmtInt(k?.messages)} trend={series('messages')} delta={delta('messages')} sub={k && k.active_days ? `${(k.messages / k.active_days).toFixed(1)} per active day` : undefined} />
+      <Stat label="Active days" value={fmtInt(k?.active_days)} trend={series('active_days')} delta={delta('active_days')} sub={k && span ? `${fmtPct(k.active_days / span, 0)} of ${fmtInt(span)} days` : undefined} />
+      <Stat label="People" value={fmtInt(k?.senders)} trend={series('senders')} delta={delta('senders')} sub={`of ${fmtInt(conv.participantCount)} members`} />
+      <Stat label="Words" value={fmtCompact(k?.words)} trend={series('words')} delta={delta('words')} sub={k && k.messages ? `${(k.words / k.messages).toFixed(1)} per message` : undefined} />
+      <Stat label="Media" value={fmtInt(k?.media)} trend={series('media')} delta={delta('media')} sub={k && k.messages ? `${fmtPct(k.media / k.messages)} of messages` : undefined} />
+      <Stat label="Reactions" value={fmtInt(k?.reactions)} trend={series('reactions')} delta={delta('reactions')} sub={k && k.messages ? `${((k.reactions / k.messages) * 100).toFixed(1)} per 100 messages` : undefined} />
+      <Stat label="Calls" value={fmtInt(k?.calls)} trend={series('calls')} delta={delta('calls')} sub={k ? `${(k.call_secs / 3600).toFixed(1)} h in total` : undefined} />
+      <Stat label="Your share" value={hasMe && k?.messages ? fmtPct(k.mine / k.messages) : '–'} trend={hasMe ? trend.map((r) => (r.messages ? r.mine / r.messages : 0)) : undefined} sub={hasMe ? `${fmtInt(k?.mine)} sent by you` : 'you are not in this one'} />
     </div>
   );
 }
@@ -108,6 +119,8 @@ function Timeline() {
   const t = useChartTheme();
   const { conv, filters, setFilters, seriesNames, colorOf, inspect } = useConversation();
   const [grain, setGrain] = useState<Grain>(() => autoGrain((conv.lastTs - conv.firstTs) / DAY));
+  // Past 8 people, 20+ thin stripes are noise: start with the total.
+  const [mode, setMode] = useState<'total' | 'people'>(() => (seriesNames.length > 8 ? 'total' : 'people'));
   const data = useSeriesByBucket(grain, 'ctx');
 
   const option = useMemo(() => {
@@ -120,11 +133,15 @@ function Timeline() {
     const i0 = fromMs === null ? 0 : Math.max(0, data.starts.findLastIndex((b) => b <= fromMs));
     const i1 = toMs === null ? labels.length - 1 : Math.max(0, data.starts.findLastIndex((b) => b <= toMs));
     const ranged = fromMs !== null || toMs !== null;
-    const names = seriesNames.filter((s) => data.bySeries.has(s));
+    const people = seriesNames.filter((s) => data.bySeries.has(s));
+    const total = data.starts.map((_, i) => people.reduce((n, s) => n + data.bySeries.get(s)![i], 0));
+    const names = mode === 'total' ? ['All messages'] : people;
+    const valuesOf = (s: string) => (mode === 'total' ? total : data.bySeries.get(s));
+    const colorFor = (s: string) => (mode === 'total' ? t.ink2 : colorOf(s));
     return {
       ...base,
-      grid: { ...base.grid, top: 36, bottom: 40 },
-      legend: legend(t, names),
+      grid: { ...base.grid, top: mode === 'total' ? 16 : 36, bottom: 40 },
+      legend: mode === 'total' ? { show: false } : legend(t, names),
       tooltip: {
         ...base.tooltip,
         trigger: 'axis',
@@ -151,15 +168,15 @@ function Timeline() {
         stack: 'all',
         large: labels.length > 600,
         barCategoryGap: labels.length > 200 ? '10%' : '25%',
-        itemStyle: { color: colorOf(s), borderRadius: idx === names.length - 1 ? [2, 2, 0, 0] : 0 },
+        itemStyle: { color: colorFor(s), opacity: mode === 'total' ? 0.75 : 1, borderRadius: idx === names.length - 1 ? [2, 2, 0, 0] : 0 },
         emphasis: { focus: 'series' },
-        data: data.bySeries.get(s),
+        data: valuesOf(s),
         ...(idx === 0 && ranged
           ? { markArea: { silent: true, itemStyle: { color: t.brush }, data: [[{ xAxis: labels[i0] }, { xAxis: labels[i1] }]] } }
           : {}),
       })),
     };
-  }, [data, grain, t, seriesNames, colorOf, filters.from, filters.to]);
+  }, [data, grain, t, seriesNames, colorOf, filters.from, filters.to, mode]);
 
   const bucketEnd = (i: number) => (data!.starts[i + 1] ?? data!.starts[i] + DAY) - DAY;
   const lastBrush = useRef(0);
@@ -190,6 +207,7 @@ function Timeline() {
       actions={
         <div className="flex items-center gap-3">
           <span className="text-[11px] text-ink-3">{filters.from || filters.to ? 'Whole history, selection shaded' : 'Drag to filter dates'} · click a period to read · pinch or ⌃-scroll to zoom</span>
+          <Segmented value={mode} options={[['total', 'Total'], ['people', 'By person']]} onChange={setMode} />
           <Segmented value={grain} options={GRAINS.map((g) => [g, g[0].toUpperCase() + g.slice(1)] as [Grain, string])} onChange={setGrain} />
         </div>
       }
@@ -332,43 +350,111 @@ function ShareOverTime() {
 
 // --- Person × year ------------------------------------------------------------
 
-function PersonYearHeatmap() {
+const BUMP_TOP = 15;
+
+/** Few enough periods that the lines stay readable (roughly 4–25). */
+function bumpGrain(spanDays: number): Grain {
+  if (spanDays > 4 * 365) return 'year';
+  if (spanDays > 540) return 'quarter';
+  if (spanDays > 120) return 'month';
+  if (spanDays > 21) return 'week';
+  return 'day';
+}
+
+/** Start of the period holding `ms`, matching DuckDB's date_trunc (weeks start Monday). */
+function truncate(ms: number, g: Grain): number {
+  const d = new Date(ms);
+  const y = d.getUTCFullYear(), m = d.getUTCMonth();
+  if (g === 'year') return Date.UTC(y, 0, 1);
+  if (g === 'quarter') return Date.UTC(y, m - (m % 3), 1);
+  if (g === 'month') return Date.UTC(y, m, 1);
+  const day = Date.UTC(y, m, d.getUTCDate());
+  return g === 'week' ? day - ((d.getUTCDay() + 6) % 7) * DAY : day;
+}
+
+function nextBucket(ms: number, g: Grain): number {
+  const d = new Date(ms);
+  if (g === 'year') return Date.UTC(d.getUTCFullYear() + 1, 0, 1);
+  if (g === 'quarter') return Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 3, 1);
+  if (g === 'month') return Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1);
+  return ms + (g === 'week' ? 7 : 1) * DAY;
+}
+
+/** Who wrote the most each year, as ranks: crossing lines show who rose and fell. */
+function PersonYearBump() {
   const t = useChartTheme();
-  const { seriesSql, seriesNames, seriesWhere, inspect, colorOf } = useConversation();
+  const [racing, setRacing] = useState(false);
+  const closeRace = useCallback(() => setRacing(false), []);
+  const [limit, setLimit] = useState<'top' | 'all'>('top');
+  const { seriesNames, seriesWhere, inspect, colorOf } = useConversation();
   const [from, to] = useSelectedRange();
-  const q = useQuery<{ s: string; y: number; n: number }>(`SELECT ${seriesSql} AS s, year(ts) AS y, count(*) AS n FROM sel GROUP BY 1, 2`);
-  const y0 = new Date(from).getUTCFullYear();
-  const y1 = new Date(to).getUTCFullYear();
-  const years = Array.from({ length: y1 - y0 + 1 }, (_, i) => String(y0 + i));
-  const rows = seriesNames.filter((s) => q.data?.some((r) => r.s === s)).reverse();
-
-  const option = useMemo(
-    () => gridHeatmap(t, {
-      x: years,
-      y: rows,
-      cells: (q.data ?? []).map((r) => [r.y - y0, rows.indexOf(r.s), r.n] as [number, number, number]).filter((c) => c[1] >= 0),
-      title: (x, y) => `${y} · ${x}`,
-      value: (v) => `${fmtInt(v)} messages`,
-      yColors: rows.map(colorOf),
-    }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [q.data, rows.join(), years.join(), t, colorOf],
+  // The period follows the selected range: years for the whole history,
+  // months for the last year, days for a couple of weeks.
+  const grain = bumpGrain((to - from) / DAY);
+  const periods = useMemo(() => {
+    const out: number[] = [];
+    for (let b = truncate(from, grain); b <= to; b = nextBucket(b, grain)) out.push(b);
+    return out;
+  }, [from, to, grain]);
+  const q = useQuery<{ s: string; b: number; n: number }>(
+    `SELECT sender AS s, epoch_ms(date_trunc('${grain}', ts)) AS b, count(*) AS n FROM sel GROUP BY 1, 2`,
   );
-
+  const { option, shown } = useMemo(() => {
+    const index = new Map(periods.map((b, i) => [b, i]));
+    const values = new Map<string, (number | null)[]>();
+    for (const r of q.data ?? []) {
+      const i = index.get(r.b);
+      if (i === undefined) continue; // a stale result from the previous grain
+      let arr = values.get(r.s);
+      if (!arr) values.set(r.s, (arr = new Array(periods.length).fill(null)));
+      arr[i] = r.n;
+    }
+    const totals = [...values].map(([n, v]) => [n, v.reduce<number>((a, b) => a + (b ?? 0), 0)] as const).sort((a, b) => b[1] - a[1]);
+    const top = (limit === 'all' ? totals : totals.slice(0, BUMP_TOP)).filter(([, v]) => v > 0);
+    const shown = seriesNames.filter((n) => top.some(([m]) => m === n));
+    // Rank among the people drawn, so ranks run 1..N with no holes.
+    const ranks = ranksPerPeriod(new Map(shown.map((n) => [n, values.get(n)!])), periods.length);
+    const maxRank = Math.max(2, ...shown.flatMap((n) => ranks.get(n)!.filter((r): r is number => r != null)));
+    return {
+      shown,
+      option: bumpChart(t, {
+        periods: periods.map((b) => bucketLabel(b, grain)),
+        series: shown.map((n) => ({ name: n, ranks: ranks.get(n)!, values: values.get(n)! })),
+        colorOf, unit: 'messages', maxRank,
+      }),
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q.data, seriesNames, colorOf, t, periods, limit]);
+  if (periods.length < 2) return null;
   return (
-    <Panel title="Messages per person per year" actions={<span className="text-[11px] text-ink-3">click a cell to read</span>} bodyClassName="p-2">
+    <Panel
+      title={`Who led each ${grain}`}
+      actions={
+        <div className="flex items-center gap-3">
+          <span className="text-[11px] text-ink-3">{`rank by messages per ${grain} · hover a line to follow it · click a point to read`}</span>
+          {seriesNames.length > BUMP_TOP && (
+            <Segmented value={limit} options={[['top', `Top ${BUMP_TOP}`], ['all', `All ${seriesNames.length}`]]} onChange={setLimit} />
+          )}
+          <button onClick={() => setRacing(true)} className="inline-flex h-6 items-center gap-1.5 rounded-md bg-accent px-2.5 text-[11px] font-medium text-white hover:opacity-90" title="Animate month by month, full screen">
+            <Play size={11} fill="currentColor" /> Play
+          </button>
+        </div>
+      }
+      bodyClassName="p-2"
+    >
       <EChart
         option={option}
-        height={Math.max(180, rows.length * rowHeight(rows.length) + 64)}
+        height={Math.max(220, shown.length * (shown.length > 30 ? 16 : 26) + 60)}
         dimmed={q.loading}
         on={{
-          click: (p: { value: [number, number, number] }) => {
-            const name = rows[p.value[1]];
-            const y = years[p.value[0]];
-            inspect({ title: `${name} · ${y}`, where: `year(ts) = ${y} AND ${seriesWhere(name)}` });
-          },
+          click: (p: { seriesName: string; dataIndex: number }) =>
+            inspect({
+              title: `${p.seriesName} · ${bucketLabel(periods[p.dataIndex], grain)}`,
+              where: `date_trunc('${grain}', ts) = ${tsLit(periods[p.dataIndex])} AND ${seriesWhere(p.seriesName)}`,
+            }),
         }}
       />
+      {racing && <RankRace onClose={closeRace} />}
     </Panel>
   );
 }
@@ -533,7 +619,7 @@ export function Overview({ openPerson }: { openPerson: (name: string) => void })
         <ShareOverTime />
       </div>
       <EveryoneGrid openPerson={openPerson} />
-      <PersonYearHeatmap />
+      <PersonYearBump />
       <PeopleTable />
     </div>
   );

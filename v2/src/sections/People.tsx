@@ -4,7 +4,7 @@
 import { Search } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { useConversation } from '../app/ConversationProvider';
-import { repliesCte, replyPairWhere } from '../app/relations';
+import { repliesCte, replyPairWhere, TURNS_CTE } from '../app/relations';
 import { EChart } from '../charts/EChart';
 import { baseOption, esc, legend, tipRow, useChartTheme } from '../charts/theme';
 import { lit } from '../db/duckdb';
@@ -111,6 +111,101 @@ function Header({ name }: { name: string }) {
         <Stat label="Median reply" value={fmtDuration(reply?.med)} sub={reply ? `${fmtInt(reply.n)} replies` : undefined} />
       </div>
     </>
+  );
+}
+
+type Traits = {
+  s: string; n: number; wpm: number | null; night: number; weekend: number; media: number; questions: number;
+  got_pm: number; gave_pm: number; med: number | null; dbl: number | null;
+};
+
+const TRAITS: { key: keyof Traits; label: string; fmt: (v: number) => string; lowIsMore?: boolean }[] = [
+  { key: 'n', label: 'Messages', fmt: (v) => fmtInt(v) },
+  { key: 'wpm', label: 'Words per message', fmt: (v) => v.toFixed(1) },
+  { key: 'got_pm', label: 'Reactions received / msg', fmt: (v) => v.toFixed(2) },
+  { key: 'gave_pm', label: 'Reactions given / msg', fmt: (v) => v.toFixed(2) },
+  { key: 'med', label: 'Reply speed', fmt: (v) => fmtDuration(v), lowIsMore: true },
+  { key: 'dbl', label: 'Double-texting', fmt: (v) => fmtPct(v, 0) },
+  { key: 'night', label: 'Night messages', fmt: (v) => fmtPct(v, 0) },
+  { key: 'weekend', label: 'Weekend messages', fmt: (v) => fmtPct(v, 0) },
+  { key: 'media', label: 'Media share', fmt: (v) => fmtPct(v, 1) },
+  { key: 'questions', label: 'Questions asked', fmt: (v) => fmtPct(v, 0) },
+];
+
+/**
+ * Where this person sits on ten traits: every member is a faint dot placed by
+ * percentile (so every row shares one 0–100 scale), the person a big one.
+ */
+function HowTheyCompare({ name }: { name: string }) {
+  const t = useChartTheme();
+  const { colorOf, replyWindow } = useConversation();
+  const q = useQuery<Traits>(`
+    WITH ${TURNS_CTE}, ${repliesCte(replyWindow)},
+    base AS (
+      SELECT sender AS s, count(*) AS n, avg(words) FILTER (kind = 'text') AS wpm,
+             count(*) FILTER (hour(ts) >= 23 OR hour(ts) < 5) / count(*) AS night,
+             count(*) FILTER (isodow(ts) >= 6) / count(*) AS weekend,
+             count(*) FILTER (kind IN ${MEDIA}) / count(*) AS media,
+             count(*) FILTER (kind = 'text' AND trim(text) LIKE '%?') / greatest(1, count(*) FILTER (kind = 'text')) AS questions
+      FROM span GROUP BY 1 HAVING count(*) >= 20
+    ),
+    rec AS (SELECT receiver AS s, count(*) AS got FROM span_reactions WHERE actor <> receiver GROUP BY 1),
+    giv AS (SELECT actor AS s, count(*) AS gave FROM span_reactions WHERE actor <> receiver GROUP BY 1),
+    rep AS (SELECT replier AS s, median(lat_ms) AS med FROM replies GROUP BY 1 HAVING count(*) >= 10),
+    tt AS (SELECT sender AS s, count(*) FILTER (n >= 2) / count(*) AS dbl FROM turns GROUP BY 1)
+    SELECT base.*, coalesce(rec.got, 0) / base.n AS got_pm, coalesce(giv.gave, 0) / base.n AS gave_pm, rep.med, tt.dbl
+    FROM base LEFT JOIN rec USING (s) LEFT JOIN giv USING (s) LEFT JOIN rep USING (s) LEFT JOIN tt USING (s)`);
+  const rows = q.data ?? [];
+  const option = useMemo(() => {
+    const base = baseOption(t);
+    const points: { value: [number, number]; name: string; raw: number; rank: number; of: number; me: boolean }[] = [];
+    TRAITS.forEach((tr, ti) => {
+      const scored = rows.filter((r) => r[tr.key] != null).map((r) => ({ name: r.s, v: Number(r[tr.key]) }));
+      // Rank so that "more" is to the right (for reply speed, faster = more).
+      const sorted = [...scored].sort((a, b) => (tr.lowIsMore ? b.v - a.v : a.v - b.v));
+      sorted.forEach((x, i) => {
+        const pct = sorted.length > 1 ? (i / (sorted.length - 1)) * 100 : 50;
+        // Deterministic jitter so dots on the same spot don't hide each other.
+        const jitter = ((x.name.length * 37 + i * 13) % 7) / 7 - 0.5;
+        points.push({ value: [pct, ti + (x.name === name ? 0 : jitter * 0.45)], name: x.name, raw: x.v, rank: sorted.length - i, of: sorted.length, me: x.name === name });
+      });
+    });
+    const others = points.filter((p) => !p.me), mine = points.filter((p) => p.me);
+    const tip = (p: { dataIndex: number; seriesIndex: number }) => {
+      const d = (p.seriesIndex === 0 ? others : mine)[p.dataIndex];
+      const tr = TRAITS[Math.round(d.value[1])];
+      return `<div style="font-weight:600;margin-bottom:4px">${esc(d.name)}</div>` + tipRow(colorOf(d.name), tr.fmt(d.raw), tr.label) + tipRow(t.muted, `#${d.rank} of ${d.of}`, tr.lowIsMore ? '(1 = fastest)' : '');
+    };
+    return {
+      ...base,
+      grid: { left: 170, right: 60, top: 26, bottom: 24 },
+      tooltip: { ...base.tooltip, trigger: 'item', formatter: tip },
+      xAxis: {
+        type: 'value', min: 0, max: 100, interval: 50, ...base.axisCommon, splitLine: { show: false },
+        axisLabel: { ...base.axisCommon.axisLabel, formatter: (v: number) => (v === 0 ? 'least' : v === 100 ? 'most' : v === 50 ? 'median' : '') },
+      },
+      yAxis: {
+        type: 'category', inverse: true, data: TRAITS.map((x) => x.label), ...base.axisCommon, axisLine: { show: false }, axisTick: { show: false },
+        splitLine: { show: true, lineStyle: { color: t.grid } },
+        axisLabel: { color: t.ink2, fontSize: 11 },
+      },
+      series: [
+        { type: 'scatter', symbolSize: 7, itemStyle: { color: t.muted, opacity: 0.35 }, data: others.map((p) => p.value) },
+        {
+          type: 'scatter', symbolSize: 15, z: 3,
+          itemStyle: { color: colorOf(name), borderColor: t.surface, borderWidth: 2 },
+          label: { show: true, position: 'right', color: t.ink, fontSize: 11, fontWeight: 600, formatter: (p: { dataIndex: number }) => TRAITS[Math.round(mine[p.dataIndex].value[1])].fmt(mine[p.dataIndex].raw) },
+          data: mine.map((p) => p.value),
+        },
+      ],
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q.data, name, t, colorOf]);
+  if (rows.length < 3) return null;
+  return (
+    <Panel title="How they compare" actions={<span className="text-[11px] text-ink-3">each row ranks everyone with 20+ messages · faint dots = the others · hover for values</span>} bodyClassName="p-2">
+      <EChart option={option} height={TRAITS.length * 34 + 50} dimmed={q.loading} />
+    </Panel>
   );
 }
 
@@ -446,6 +541,7 @@ export function People({ who, setWho }: { who?: string; setWho: (name: string) =
       <div className="@container min-w-0 flex-1 overflow-auto">
         <div className="space-y-3 p-4">
           <Header name={name} />
+          <HowTheyCompare name={name} />
           <VolumeAndShare name={name} />
           <div className="grid grid-cols-1 gap-3 @5xl:grid-cols-[3fr_2fr]">
             <HourVsGroup name={name} />

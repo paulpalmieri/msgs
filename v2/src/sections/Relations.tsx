@@ -1,11 +1,12 @@
-// Relations: how people interact. Who replies to whom and how fast,
-// who reacts to whom, who mentions whom, and how turns are shared.
+// Relations: how people interact. A reply network, who → whom flows
+// (replies, reactions, @mentions), how fast each person replies, and how
+// turns are shared.
 import { useMemo, useState } from 'react';
 import { pairPeopleSql, useConversation } from '../app/ConversationProvider';
-import { matrixPeople, repliesCte, REPLY_WINDOWS, replyPairWhere, TURNS_CTE } from '../app/relations';
+import { repliesCte, REPLY_WINDOWS, replyPairWhere, TURNS_CTE } from '../app/relations';
 import { EChart } from '../charts/EChart';
-import { gridHeatmap, personHeatmap, quantile, rowHeight } from '../charts/heatmap';
-import { baseOption, esc, tipRow, useChartTheme } from '../charts/theme';
+import { personBoxplot, type Quantiles } from '../charts/shapes';
+import { baseOption, esc, legend, tipRow, useChartTheme } from '../charts/theme';
 import { lit } from '../db/duckdb';
 import { useQuery } from '../db/useQuery';
 import { fmtInt, fmtPct } from '../lib/format';
@@ -13,7 +14,6 @@ import { fmtDuration, MINUTE } from '../lib/time';
 import { Panel, Segmented, Stat } from '../ui/primitives';
 import { Badge } from '../ui/Badge';
 
-type Cell = [number, number, number];
 
 export function ReplyWindowControl() {
   const { replyWindow, setReplyWindow } = useConversation();
@@ -149,176 +149,160 @@ function ReplyNetwork({ openPerson }: { openPerson: (name: string) => void }) {
   );
 }
 
-// --- Matrices -------------------------------------------------------------------
+// --- Flows ------------------------------------------------------------------------
 
-function MatrixPanel({ title, hint, height, option, loading, onCell, controls }: {
-  title: string; hint: string; height: number; option: Record<string, unknown>; loading: boolean; onCell: (x: number, y: number) => void; controls?: React.ReactNode;
-}) {
+type Flow = 'replies' | 'reactions' | 'mentions';
+const FLOW_UNIT: Record<Flow, string> = { replies: 'replies', reactions: 'reactions', mentions: 'mentions' };
+
+/**
+ * Who → whom as a Sankey diagram: people on the left send replies, reactions
+ * or @mentions to people on the right; band width = how many. Small flows are
+ * dropped so the main ones stay readable.
+ */
+function FlowSankey() {
+  const t = useChartTheme();
+  const { conv, colorOf, inspect, filters, replyWindow } = useConversation();
+  const [flow, setFlow] = useState<Flow>('replies');
+  const everyone = conv.people.filter((p) => p.messages > 0).map((p) => p.name);
+  const sql: Record<Flow, string> = {
+    replies: `WITH ${repliesCte(replyWindow)} SELECT replier AS a, target AS b, count(*) AS n FROM replies WHERE ${pairPeopleSql(filters, 'replier', 'target')} GROUP BY 1, 2`,
+    reactions: `SELECT actor AS a, receiver AS b, count(*) AS n FROM span_reactions WHERE actor <> receiver AND ${pairPeopleSql(filters, 'actor', 'receiver')} GROUP BY 1, 2`,
+    mentions: `WITH p(name) AS (VALUES ${everyone.map((n) => `(${lit(n)})`).join(', ')}),
+      m AS (SELECT sender, text FROM span WHERE text LIKE '%@%')
+      SELECT m.sender AS a, p.name AS b, count(*) AS n FROM m JOIN p ON position('@' || p.name IN m.text) > 0
+      WHERE m.sender <> p.name AND ${pairPeopleSql(filters, 'm.sender', 'p.name')} GROUP BY 1, 2`,
+  };
+  const q = useQuery<{ a: string; b: string; n: number }>(sql[flow]);
+
+  const { option, height, kept, total } = useMemo(() => {
+    const base = baseOption(t);
+    const links = [...(q.data ?? [])].sort((x, y) => y.n - x.n);
+    const total = links.reduce((s, l) => s + l.n, 0);
+    // Keep flows covering 95% of the volume (max 90), plus each person's biggest one.
+    const keep = new Set<string>();
+    let acc = 0;
+    for (const l of links) {
+      if (acc / Math.max(1, total) >= 0.95 || keep.size >= 90) break;
+      keep.add(`${l.a}\u0000${l.b}`);
+      acc += l.n;
+    }
+    for (const who of new Set(links.map((l) => l.a))) {
+      const top = links.find((l) => l.a === who);
+      if (top) keep.add(`${top.a}\u0000${top.b}`);
+    }
+    const kept = links.filter((l) => keep.has(`${l.a}\u0000${l.b}`));
+    const keptTotal = kept.reduce((s, l) => s + l.n, 0);
+    const sent = new Map<string, number>(), got = new Map<string, number>();
+    for (const l of links) {
+      sent.set(l.a, (sent.get(l.a) ?? 0) + l.n);
+      got.set(l.b, (got.get(l.b) ?? 0) + l.n);
+    }
+    const left = [...new Set(kept.map((l) => l.a))], right = [...new Set(kept.map((l) => l.b))];
+    const unit = FLOW_UNIT[flow];
+    return {
+      kept,
+      total,
+      height: Math.max(320, Math.max(left.length, right.length) * 28 + 40),
+      option: {
+        ...base,
+        tooltip: {
+          ...base.tooltip,
+          trigger: 'item',
+          formatter: (p: { dataType: string; data: { source?: string; target?: string; value?: number; name?: string } }) => {
+            if (p.dataType === 'edge') {
+              const a = p.data.source!.slice(5), b = p.data.target!.slice(3);
+              return `<div style="margin-bottom:4px;opacity:.7">${esc(a)} → ${esc(b)}</div>` +
+                tipRow(colorOf(a), fmtInt(p.data.value!), `${unit} · ${fmtPct(p.data.value! / Math.max(1, sent.get(a) ?? 0), 0)} of ${esc(a.split(' ')[0])}’s`);
+            }
+            const name = p.data.name!.replace(/^(from|to):/, '');
+            return `<div style="font-weight:600;margin-bottom:4px">${esc(name)}</div>` +
+              tipRow(colorOf(name), fmtInt(sent.get(name) ?? 0), `${unit} given`) + tipRow(t.ink2, fmtInt(got.get(name) ?? 0), `${unit} received`);
+          },
+        },
+        series: [{
+          type: 'sankey',
+          left: 130, right: 130, top: 10, bottom: 10,
+          nodeWidth: 10, nodeGap: 8, layoutIterations: 32, draggable: false,
+          emphasis: { focus: 'adjacency' },
+          label: {
+            color: t.ink2, fontSize: 11,
+            // Tiny nodes stack into a few pixels; their labels would collide.
+            formatter: (p: { name: string; value: number }) => (p.value < keptTotal * 0.012 ? '' : p.name.replace(/^(from|to):/, '')),
+          },
+          levels: [{ depth: 0, label: { position: 'left' } }, { depth: 1, label: { position: 'right' } }],
+          lineStyle: { color: 'source', opacity: 0.35, curveness: 0.5 },
+          data: [
+            ...left.map((n) => ({ name: `from:${n}`, itemStyle: { color: colorOf(n), borderWidth: 0 } })),
+            ...right.map((n) => ({ name: `to:${n}`, itemStyle: { color: colorOf(n), borderWidth: 0 } })),
+          ],
+          links: kept.map((l) => ({ source: `from:${l.a}`, target: `to:${l.b}`, value: l.n })),
+        }],
+      },
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q.data, flow, t, colorOf]);
+
+  const shownShare = total ? kept.reduce((s, l) => s + l.n, 0) / total : 1;
   return (
-    <Panel title={title} actions={<div className="flex items-center gap-3"><span className="text-[11px] text-ink-3">{hint}</span>{controls}</div>} bodyClassName="p-2">
-      <EChart option={option} height={height} dimmed={loading} on={{ click: (p: { value: Cell }) => onCell(p.value[0], p.value[1]) }} />
+    <Panel
+      title="Who → whom"
+      actions={
+        <div className="flex items-center gap-3">
+          <span className="text-[11px] text-ink-3">{shownShare < 0.999 ? `biggest flows, ${fmtPct(shownShare, 0)} of all · ` : ''}click a band to read</span>
+          <Segmented value={flow} options={[['replies', 'Replies'], ['reactions', 'Reactions'], ['mentions', '@mentions']] as [Flow, string][]} onChange={setFlow} />
+        </div>
+      }
+      bodyClassName="p-2"
+    >
+      {q.data && !q.data.length && !q.loading ? (
+        <div className="p-3 text-ink-3">No {FLOW_UNIT[flow]} between people in this selection.</div>
+      ) : (
+        <EChart
+          option={option}
+          height={height}
+          dimmed={q.loading}
+          on={{
+            click: (p: { dataType: string; data: { source?: string; target?: string } }) => {
+              if (p.dataType !== 'edge') return;
+              const a = p.data.source!.slice(5), b = p.data.target!.slice(3);
+              if (flow === 'replies') inspect({ title: `${a} ↔ ${b}`, where: replyPairWhere(replyWindow, a, b), from: 'span' });
+              else if (flow === 'reactions') inspect({ title: `${a} reacting to ${b}`, where: `message_id IN (SELECT message_id FROM span_reactions WHERE actor = ${lit(a)} AND receiver = ${lit(b)})`, from: 'span' });
+              else inspect({ title: `${a} mentioning ${b}`, where: `sender = ${lit(a)} AND position(${lit(`@${b}`)} IN text) > 0`, from: 'span' });
+            },
+          }}
+        />
+      )}
     </Panel>
-  );
-}
-
-function matrixHeight(n: number) {
-  return Math.max(220, n * rowHeight(n) + 130);
-}
-
-function ReplyMatrix() {
-  const t = useChartTheme();
-  const { conv, colorOf, replyWindow, inspect, filters } = useConversation();
-  const [mode, setMode] = useState<'count' | 'share'>('count');
-  const { names, fold } = matrixPeople(conv);
-  const q = useQuery<{ a: string; b: string; n: number }>(`
-    WITH ${repliesCte(replyWindow)}
-    SELECT ${fold('replier')} AS a, ${fold('target')} AS b, count(*) AS n FROM replies
-    WHERE ${pairPeopleSql(filters, 'replier', 'target')} GROUP BY 1, 2`);
-  const rows = [...names].reverse();
-  const option = useMemo(() => {
-    const rowTotal = new Map<string, number>();
-    for (const r of q.data ?? []) rowTotal.set(r.a, (rowTotal.get(r.a) ?? 0) + r.n);
-    const cells = (q.data ?? [])
-      .map((r) => [names.indexOf(r.b), rows.indexOf(r.a), mode === 'count' ? r.n : (r.n / rowTotal.get(r.a)!) * 100] as Cell)
-      .filter((c) => c[0] >= 0 && c[1] >= 0);
-    return gridHeatmap(t, {
-      x: names, y: rows, cells, yName: 'who replies ↓', xRotate: names.length > 4 ? 35 : 0, yColors: rows.map(colorOf),
-      max: quantile(cells.map((c) => c[2]), 0.98),
-      title: (x, y) => `${y} → ${x}`,
-      value: (v) => (mode === 'count' ? `${fmtInt(v)} replies` : `${v.toFixed(0)}% of their replies`),
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [q.data, mode, t, names.join(), colorOf]);
-  return (
-    <MatrixPanel
-      title="Who replies to whom"
-      hint="row replies to column · click a cell to read"
-      height={matrixHeight(names.length)}
-      option={option}
-      loading={q.loading}
-      controls={<Segmented value={mode} options={[['count', 'Count'], ['share', 'Row %']]} onChange={setMode} />}
-      onCell={(x, y) => {
-        const [a, b] = [rows[y], names[x]];
-        inspect({ title: `${a} ↔ ${b}`, where: replyPairWhere(replyWindow, a, b), from: 'span' });
-      }}
-    />
-  );
-}
-
-function ReactionMatrix() {
-  const t = useChartTheme();
-  const { conv, colorOf, inspect, filters } = useConversation();
-  const [mode, setMode] = useState<'count' | 'rate'>('count');
-  const { names, fold } = matrixPeople(conv);
-  const q = useQuery<{ a: string; b: string; n: number; base: number }>(`
-    WITH msgs AS (SELECT ${fold('sender')} AS b, count(*) AS base FROM span GROUP BY 1)
-    SELECT ${fold('actor')} AS a, ${fold('receiver')} AS b, count(*) AS n, any_value(msgs.base) AS base
-    FROM span_reactions JOIN msgs ON msgs.b = ${fold('receiver')}
-    WHERE ${pairPeopleSql(filters, 'actor', 'receiver')} GROUP BY 1, 2`);
-  const rows = [...names].reverse();
-  const option = useMemo(() => {
-    const cells = (q.data ?? [])
-      .map((r) => [names.indexOf(r.b), rows.indexOf(r.a), mode === 'count' ? r.n : (r.n / r.base) * 100] as Cell)
-      .filter((c) => c[0] >= 0 && c[1] >= 0);
-    return gridHeatmap(t, {
-      x: names, y: rows, cells, yName: 'who reacts ↓', xRotate: names.length > 4 ? 35 : 0, yColors: rows.map(colorOf),
-      max: quantile(cells.map((c) => c[2]), 0.98),
-      title: (x, y) => `${y} → ${x}`,
-      value: (v) => (mode === 'count' ? `${fmtInt(v)} reactions` : `${v.toFixed(1)} per 100 of their messages`),
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [q.data, mode, t, names.join(), colorOf]);
-  return (
-    <MatrixPanel
-      title="Who reacts to whom"
-      hint="row reacts to column · click to read"
-      height={matrixHeight(names.length)}
-      option={option}
-      loading={q.loading}
-      controls={<Segmented value={mode} options={[['count', 'Count'], ['rate', 'Per 100 msgs']]} onChange={setMode} />}
-      onCell={(x, y) => {
-        const [a, b] = [rows[y], names[x]];
-        inspect({ title: `${a} reacting to ${b}`, where: `message_id IN (SELECT message_id FROM span_reactions WHERE actor = ${lit(a)} AND receiver = ${lit(b)})`, from: 'span' });
-      }}
-    />
-  );
-}
-
-function MentionMatrix() {
-  const t = useChartTheme();
-  const { conv, colorOf, inspect, filters } = useConversation();
-  const { names, fold } = matrixPeople(conv);
-  const all = conv.people.filter((p) => p.messages > 0).map((p) => p.name);
-  const q = useQuery<{ a: string; b: string; n: number }>(`
-    WITH p(name) AS (VALUES ${all.map((n) => `(${lit(n)})`).join(', ')}),
-         m AS (SELECT sender, text FROM span WHERE text LIKE '%@%')
-    SELECT ${fold('m.sender')} AS a, ${fold('p.name')} AS b, count(*) AS n
-    FROM m JOIN p ON position('@' || p.name IN m.text) > 0
-    WHERE ${pairPeopleSql(filters, 'm.sender', 'p.name')} GROUP BY 1, 2`);
-  const rows = [...names].reverse();
-  const option = useMemo(() => {
-    const cells = (q.data ?? []).map((r) => [names.indexOf(r.b), rows.indexOf(r.a), r.n] as Cell).filter((c) => c[0] >= 0 && c[1] >= 0);
-    return gridHeatmap(t, {
-      x: names, y: rows, cells, yName: 'who mentions ↓', xRotate: names.length > 4 ? 35 : 0, yColors: rows.map(colorOf),
-      max: quantile(cells.map((c) => c[2]), 0.98),
-      title: (x, y) => `${y} mentions ${x}`,
-      value: (v) => `${fmtInt(v)} mentions`,
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [q.data, t, names.join(), colorOf]);
-  if (q.data && !q.data.length) return null;
-  return (
-    <MatrixPanel
-      title="Who mentions whom (@name)"
-      hint="row mentions column · click to read"
-      height={matrixHeight(names.length)}
-      option={option}
-      loading={q.loading}
-      onCell={(x, y) => {
-        const [a, b] = [rows[y], names[x]];
-        inspect({ title: `${a} mentioning ${b}`, where: `sender = ${lit(a)} AND position(${lit(`@${b}`)} IN text) > 0`, from: 'span' });
-      }}
-    />
   );
 }
 
 // --- Reply times -------------------------------------------------------------------
 
-const LAT_BINS: [string, number][] = [
-  ['< 1 min', 1], ['1–5 min', 5], ['5–15 min', 15], ['15–60 min', 60], ['1–3 h', 180], ['3–12 h', 720], ['12–24 h', 1440],
-];
-
-function ReplyTimeDistribution() {
+/** How fast each person replies, as a distribution (fastest median on top). */
+function ReplySpeed() {
   const t = useChartTheme();
-  const { replyWindow, seriesNames, colorOf, filters } = useConversation();
-  const bins = LAT_BINS.filter((_, i) => i === 0 || LAT_BINS[i - 1][1] < replyWindow).map(([l, max]) => [l, Math.min(max, replyWindow)] as [string, number]);
-  const q = useQuery<{ s: string; b: number; n: number }>(`
+  const { replyWindow, colorOf, filters } = useConversation();
+  const q = useQuery<{ s: string; n: number; p5: number; q1: number; med: number; q3: number; p95: number }>(`
     WITH ${repliesCte(replyWindow)}
-    SELECT replier AS s,
-           CASE ${bins.map(([, max], i) => `WHEN lat_ms < ${max * MINUTE} THEN ${i}`).join(' ')} ELSE ${bins.length - 1} END AS b,
-           count(*) AS n
-    FROM replies WHERE ${pairPeopleSql(filters, 'replier', 'replier')} GROUP BY 1, 2`);
-  const { option, height } = useMemo(() => {
-    const values = new Map<string, number[]>();
-    for (const r of q.data ?? []) {
-      let arr = values.get(r.s);
-      if (!arr) values.set(r.s, (arr = new Array(bins.length).fill(0)));
-      arr[r.b] += r.n;
-    }
-    return personHeatmap(t, {
-      people: seriesNames, colorOf, x: bins.map((b) => b[0]), values, rowShare: true,
-      title: (x, p) => `${p} replied in ${x}`,
-      value: (v) => `${v.toFixed(0)}% of their replies`,
-      legend: ['more', 'less'],
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [q.data, seriesNames, colorOf, t, replyWindow]);
+    SELECT replier AS s, count(*) AS n,
+           quantile_cont(lat_ms, 0.05) AS p5, quantile_cont(lat_ms, 0.25) AS q1, median(lat_ms) AS med,
+           quantile_cont(lat_ms, 0.75) AS q3, quantile_cont(lat_ms, 0.95) AS p95
+    FROM replies WHERE ${pairPeopleSql(filters, 'replier', 'replier')} GROUP BY 1 HAVING count(*) >= 10 ORDER BY med`);
+  const { option, height } = useMemo(
+    () => personBoxplot(t, {
+      rows: (q.data ?? []).map((r) => ({ name: r.s, n: r.n, q: [r.p5, r.q1, r.med, r.q3, r.p95].map((v) => Math.max(1000, v)) as Quantiles })),
+      colorOf, format: (v) => fmtDuration(v), unit: 'reply time', log: true, axisName: 'reply time →',
+    }),
+    [q.data, t, colorOf],
+  );
   return (
-    <Panel title="How fast people reply" actions={<span className="text-[11px] text-ink-3">each row is one person’s replies</span>} bodyClassName="p-2">
+    <Panel title="How fast people reply" actions={<span className="text-[11px] text-ink-3">box = middle half · line = median · whiskers 5–95% · log scale · 10+ replies</span>} bodyClassName="p-2">
       <EChart option={option} height={height} dimmed={q.loading} />
     </Panel>
   );
 }
+
+const LINES_SHOWN = 8;
 
 function ReplyTimeByYear() {
   const t = useChartTheme();
@@ -327,27 +311,38 @@ function ReplyTimeByYear() {
     WITH ${repliesCte(replyWindow)}
     SELECT replier AS s, year(ts) AS y, median(lat_ms) AS med, count(*) AS n
     FROM replies WHERE ${pairPeopleSql(filters, 'replier', 'replier')} GROUP BY 1, 2 HAVING count(*) >= 5`);
-  const { option, height } = useMemo(() => {
+  const option = useMemo(() => {
+    const base = baseOption(t);
     const data = q.data ?? [];
     const years = [...new Set(data.map((r) => r.y))].sort();
-    const values = new Map<string, number[]>();
-    for (const r of data) {
-      let arr = values.get(r.s);
-      if (!arr) values.set(r.s, (arr = new Array(years.length).fill(null)));
-      arr[years.indexOf(r.y)] = r.med;
-    }
-    // Colour on a log scale, slowest = darkest, so a few very slow years don't wash out the rest.
-    return personHeatmap(t, {
-      people: seriesNames, colorOf, x: years.map(String), values,
-      title: (x, p) => `${p} · ${x} · median reply`,
-      value: (v) => fmtDuration(v),
-      scale: (v) => Math.log10(Math.max(1000, v)),
-      legend: ['slower', 'faster'],
-    });
+    const names = seriesNames.filter((s) => data.some((r) => r.s === s));
+    // Everyone is in the legend; the most active start visible so the lines stay readable.
+    const volume = new Map<string, number>();
+    for (const r of data) volume.set(r.s, (volume.get(r.s) ?? 0) + r.n);
+    const visible = new Set([...names].sort((a, b) => (volume.get(b) ?? 0) - (volume.get(a) ?? 0)).slice(0, LINES_SHOWN));
+    return {
+      ...base,
+      grid: { ...base.grid, top: 36 },
+      legend: { ...legend(t, names, 'line'), selected: Object.fromEntries(names.map((n) => [n, visible.has(n)])) },
+      tooltip: {
+        ...base.tooltip, trigger: 'axis', axisPointer: { type: 'line', lineStyle: { color: t.axis } },
+        formatter: (ps: { seriesName: string; value: number | null; color: string; dataIndex: number }[]) =>
+          `<div style="margin-bottom:4px;opacity:.7">${years[ps[0].dataIndex]} · median reply time</div>` +
+          ps.filter((p) => p.value != null).sort((a, b) => a.value! - b.value!).map((p) => tipRow(p.color, fmtDuration(p.value! * MINUTE), p.seriesName)).join(''),
+      },
+      xAxis: { type: 'category', data: years.map(String), boundaryGap: false, ...base.axisCommon, splitLine: { show: false } },
+      yAxis: { type: 'log', logBase: 10, ...base.axisCommon, axisLine: { show: false }, axisLabel: { ...base.axisCommon.axisLabel, formatter: (v: number) => fmtDuration(v * MINUTE) } },
+      series: names.map((s) => ({
+        name: s, type: 'line', symbol: 'circle', symbolSize: 7, connectNulls: false,
+        lineStyle: { width: 2, color: colorOf(s) }, itemStyle: { color: colorOf(s), borderColor: t.surface, borderWidth: 2 },
+        emphasis: { focus: 'series' },
+        data: years.map((y) => { const r = data.find((d) => d.s === s && d.y === y); return r ? Math.max(r.med / MINUTE, 0.05) : null; }),
+      })),
+    };
   }, [q.data, seriesNames, colorOf, t]);
   return (
-    <Panel title="Median reply time by year" actions={<span className="text-[11px] text-ink-3">darker = slower · years with 5+ replies</span>} bodyClassName="p-2">
-      <EChart option={option} height={height} dimmed={q.loading} />
+    <Panel title="Median reply time by year" actions={<span className="text-[11px] text-ink-3">log scale · click names to show or hide people</span>} bodyClassName="p-2">
+      <EChart option={option} height={320} dimmed={q.loading} />
     </Panel>
   );
 }
@@ -420,21 +415,15 @@ export function Relations({ openPerson }: { openPerson: (name: string) => void }
     <div className="space-y-3 p-4">
       <ReplyWindowControl />
       <KpiRow />
-      {active > 2 ? (
-        <div className="grid grid-cols-1 gap-3 @5xl:grid-cols-2">
-          <ReplyNetwork openPerson={openPerson} />
-          <ReplyMatrix />
-        </div>
-      ) : null}
+      <div className={`grid grid-cols-1 gap-3 ${active > 2 ? '@5xl:grid-cols-2' : ''}`}>
+        {active > 2 && <ReplyNetwork openPerson={openPerson} />}
+        <FlowSankey />
+      </div>
       <div className="grid grid-cols-1 gap-3 @4xl:grid-cols-2">
-        <ReplyTimeDistribution />
+        <ReplySpeed />
         <ReplyTimeByYear />
       </div>
       <TurnTable openPerson={openPerson} />
-      <div className="grid grid-cols-1 gap-3 @5xl:grid-cols-2">
-        <ReactionMatrix />
-        <MentionMatrix />
-      </div>
     </div>
   );
 }
