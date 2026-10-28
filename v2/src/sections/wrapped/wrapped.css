@@ -1,0 +1,56 @@
+/* Wrapped keeps v1's cinematic look: near-black, film grain, one orange
+   accent, Space Grotesk for figures and JetBrains Mono for labels. Fonts are
+   bundled locally so nothing is fetched from a third party. */
+@import '@fontsource-variable/space-grotesk';
+@import '@fontsource-variable/jetbrains-mono';
+
+.wr {
+  --wr-bg: #050505;
+  --wr-surface: #111111;
+  --wr-line: #262626;
+  --wr-text: #fafafa;
+  --wr-text-2: #a3a3a3;
+  --wr-muted: #5c5c5c;
+  --wr-accent: #ff5f1a;
+  font-family: 'Space Grotesk Variable', system-ui, sans-serif;
+  color: var(--wr-text);
+}
+.wr-label {
+  font-family: 'JetBrains Mono Variable', ui-monospace, monospace;
+  font-size: 11px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--wr-text-2);
+}
+.wr-hero { font-size: clamp(64px, 9vh, 112px); font-weight: 700; line-height: 0.9; letter-spacing: -0.035em; font-variant-numeric: tabular-nums; }
+.wr-big { font-size: clamp(40px, 6vh, 68px); font-weight: 700; line-height: 0.95; letter-spacing: -0.025em; }
+.wr-accent { color: var(--wr-accent); }
+
+.wr-grain {
+  pointer-events: none;
+  position: absolute;
+  inset: -50%;
+  opacity: 0.06;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  animation: wr-grain 0.5s steps(1) infinite;
+}
+@keyframes wr-grain {
+  0%, 100% { transform: translate(0, 0); } 20% { transform: translate(-2%, 1%); } 40% { transform: translate(1%, -2%); }
+  60% { transform: translate(-1%, 2%); } 80% { transform: translate(2%, -1%); }
+}
+
+.wr-up { opacity: 0; animation: wr-up 0.7s cubic-bezier(0.2, 0.8, 0.2, 1) forwards; }
+.wr-fade { opacity: 0; animation: wr-fade 0.8s ease forwards; }
+.wr-scale { opacity: 0; animation: wr-scale 0.8s cubic-bezier(0.2, 0.8, 0.2, 1) forwards; }
+@keyframes wr-up { from { opacity: 0; transform: translateY(24px); } to { opacity: 1; transform: none; } }
+@keyframes wr-fade { to { opacity: 1; } }
+@keyframes wr-scale { from { opacity: 0; transform: scale(0.85); } to { opacity: 1; transform: none; } }
+.wr-d1 { animation-delay: 0.15s; } .wr-d2 { animation-delay: 0.35s; } .wr-d3 { animation-delay: 0.6s; }
+.wr-d4 { animation-delay: 0.85s; } .wr-d5 { animation-delay: 1.1s; }
+.wr-grow { transform-origin: bottom; transform: scaleY(0); animation: wr-grow 0.9s cubic-bezier(0.2, 0.8, 0.2, 1) forwards; }
+@keyframes wr-grow { to { transform: scaleY(1); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .wr-up, .wr-fade, .wr-scale, .wr-grow { animation: none; opacity: 1; transform: none; }
+  .wr-grain { animation: none; }
+}
