@@ -2,6 +2,7 @@
 // so a gallery of thousands only touches what's on screen.
 import { File as FileIcon, ImageOff, Mic, Play } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
+import { isImageUrl } from '../demo/media';
 import { useMedia, useMediaUrl } from './MediaProvider';
 
 export type MediaType = 'photo' | 'video' | 'gif' | 'sticker' | 'audio' | 'file';
@@ -40,7 +41,7 @@ export function Thumb({ uri, type, onClick, className = '', fit = 'cover' }: {
   // Not scrolled into view yet, or still resolving: a placeholder, not "missing".
   else if (!visible || url === undefined) body = <span className="absolute inset-0 animate-pulse bg-surface-2" />;
   else if (url === null) body = icon(<ImageOff size={16} />, 'not in export');
-  else if (type === 'video') {
+  else if (type === 'video' && !isImageUrl(url)) {
     body = (
       <>
         <video src={`${url}#t=0.1`} preload="metadata" muted playsInline className={`h-full w-full ${fitClass}`} />

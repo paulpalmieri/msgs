@@ -11,6 +11,8 @@ npm run dev
 npm test                     # parser tests; also parses MSGS_EXPORT_DIR when set
 ```
 
+**Demo:** "Try the demo" on the import page generates a fictional export in the browser (`src/demo/`): ten conversations and about 100,000 messages, led by a five-year group chat of six people with distinct habits. It is written in Facebook's format (mojibake, chunked files, several export parts) and goes through the real import pipeline. Its media are placeholders drawn on the fly. Every name and message is made up.
+
 ## Pipeline
 
 ```

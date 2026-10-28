@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, type DragEvent } from 'react';
 import { useData, type DataState } from '../app/DataProvider';
+import { Sparkles } from 'lucide-react';
+import { DEMO_LABEL, demoFiles } from '../demo/generate';
 import { useMedia } from '../media/MediaProvider';
 import { fromDataTransfer, fromDevExport, fromDirectoryHandle, fromFileList } from '../ingest/sources';
 import { fmtInt } from '../lib/format';
@@ -60,7 +62,7 @@ export function ImportPage() {
           <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-3">MSGS · v2</div>
           <h1 className="mt-1 text-[22px] font-semibold">Import a Messenger export</h1>
           <p className="mt-1 text-ink-2">
-            Everything is parsed and queried locally in this browser. Only the <code className="font-mono text-[12px]">message_*.json</code> files are read; photos and videos are skipped.
+            Everything is parsed and queried locally in this browser; nothing is uploaded. Only the <code className="font-mono text-[12px]">message_*.json</code> files are imported. Photos and videos stay in your folder and are shown from there.
           </p>
         </div>
 
@@ -101,6 +103,16 @@ export function ImportPage() {
                   void importFrom(async () => fromFileList(files), files[0].webkitRelativePath.split('/')[0]);
                 }}
               />
+            </div>
+            <div className="mt-3 flex items-center gap-4 rounded-lg border border-line bg-surface px-5 py-4">
+              <Sparkles size={18} className="shrink-0 text-accent" />
+              <div className="min-w-0 flex-1">
+                <div className="font-medium">No export at hand? Try the demo</div>
+                <div className="text-[12px] text-ink-3">
+                  Ten fictional conversations, 100,000 messages: a five-year group chat with six friends, plus smaller chats. Every name, message and photo is made up.
+                </div>
+              </div>
+              <Button onClick={() => (media.setDemo(), importFrom(async () => demoFiles(), DEMO_LABEL))}>Try the demo</Button>
             </div>
             {state.status === 'empty' && state.error && <p className="mt-3 rounded-md border border-danger/40 px-3 py-2 text-danger">{state.error}</p>}
             {state.status === 'empty' && state.outdated && (

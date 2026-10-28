@@ -2,6 +2,7 @@
 // back to the message in the reader.
 import { BookOpen, ChevronLeft, ChevronRight, Download, X } from 'lucide-react';
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
+import { isImageUrl } from '../demo/media';
 import { Badge } from '../ui/Badge';
 import { useMediaUrl } from './MediaProvider';
 import type { MediaType } from './Thumb';
@@ -69,7 +70,7 @@ function Viewer({ items, index, setIndex, onClose, onContext }: {
       <div className="relative flex min-h-0 flex-1 items-center justify-center px-16 pb-4" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
         {url === undefined && <div className="text-white/50">Loading…</div>}
         {url === null && <div className="text-white/50">This file isn’t in the export.</div>}
-        {url && (item.type === 'video' ? (
+        {url && (item.type === 'video' && !isImageUrl(url) ? (
           <video key={url} src={url} controls autoPlay className="max-h-full max-w-full rounded" />
         ) : item.type === 'audio' ? (
           <audio key={url} src={url} controls autoPlay className="w-[420px]" />

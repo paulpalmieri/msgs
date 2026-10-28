@@ -4,7 +4,7 @@
 // part and remembers which folder listing holds which file.
 
 export interface MediaSource {
-  kind: 'folders' | 'files' | 'dev';
+  kind: 'folders' | 'files' | 'dev' | 'demo';
   /** A URL an <img>/<video> can load, or null when the file isn't in the export. */
   url(uri: string): Promise<string | null>;
 }

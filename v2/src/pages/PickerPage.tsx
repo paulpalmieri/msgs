@@ -2,6 +2,7 @@
 import { ArrowDown, ArrowUp, Search, Users, User } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { useData } from '../app/DataProvider';
+import { DEMO_LABEL } from '../demo/generate';
 import { NO_FILTERS, type Route } from '../app/router';
 import { useConversations, type ConversationRow } from '../db/useConversations';
 import { fmtDate, fmtInt, fmtPct } from '../lib/format';
@@ -44,6 +45,7 @@ export function PickerPage({ navigate }: { navigate: (r: Route) => void }) {
 
   const open = (r: ConversationRow) => navigate({ view: 'conversation', threadId: r.thread_id, section: 'overview', filters: NO_FILTERS });
   const info = state.status === 'ready' ? state.info : null;
+  const isDemo = info?.source === DEMO_LABEL;
 
   const th = (key: SortKey, label: string, align: 'left' | 'right' = 'left', width?: string) => (
     <th style={{ width }} className={`border-b border-line px-3 py-2 font-medium text-ink-3 ${align === 'right' ? 'text-right' : 'text-left'}`}>
@@ -65,9 +67,13 @@ export function PickerPage({ navigate }: { navigate: (r: Route) => void }) {
         <span className="ml-auto truncate text-ink-3">
           {info?.source} · {fmtInt(rows?.length)} conversations
         </span>
-        <Button variant="ghost" onClick={() => confirm('Delete the local dataset and import a new export?') && reset()}>
-          Import another export
-        </Button>
+        {isDemo ? (
+          <Button variant="primary" onClick={() => reset()}>Import your own export</Button>
+        ) : (
+          <Button variant="ghost" onClick={() => confirm('Delete the local dataset and import a new export?') && reset()}>
+            Import another export
+          </Button>
+        )}
       </header>
 
       <div className="flex shrink-0 items-center gap-2 border-b border-line bg-surface px-5 py-2">

@@ -4,6 +4,8 @@ import {
 } from 'lucide-react';
 import { useState } from 'react';
 import { useConversation } from '../app/ConversationProvider';
+import { useData } from '../app/DataProvider';
+import { DEMO_LABEL } from '../demo/generate';
 import type { Section } from '../app/router';
 import { fmtInt } from '../lib/format';
 import { useMedia } from '../media/MediaProvider';
@@ -34,6 +36,8 @@ export function Sidebar({ section, onSection, onSwitch, onHome }: {
   onHome: () => void;
 }) {
   const { conv, filters, setFilters } = useConversation();
+  const { state } = useData();
+  const isDemo = state.status === 'ready' && state.info.source === DEMO_LABEL;
   const [allPeople, setAllPeople] = useState(false);
   const active = conv.people.filter((p) => p.messages > 0);
   const people = allPeople ? active : active.slice(0, PEOPLE_SHOWN);
@@ -46,7 +50,8 @@ export function Sidebar({ section, onSection, onSwitch, onHome }: {
       <button onClick={onHome} className="flex h-11 shrink-0 items-center gap-1.5 border-b border-line px-3 text-left text-ink-3 hover:text-ink">
         <ChevronLeft size={14} />
         <span className="text-[12px] font-semibold tracking-[0.14em] text-ink">MSGS</span>
-        <span className="text-[12px]">· all conversations</span>
+        <span className="truncate whitespace-nowrap text-[12px]">· all conversations</span>
+        {isDemo && <span className="ml-auto rounded bg-accent-soft px-1.5 text-[10px] font-semibold uppercase tracking-wide text-accent" title="Fictional data">Demo</span>}
       </button>
 
       <div className="border-b border-line p-3">

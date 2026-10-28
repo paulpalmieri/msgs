@@ -1,6 +1,9 @@
 // Media access for the whole app: which source is active, and whether the
 // browser still lets us read the export folder.
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useData } from '../app/DataProvider';
+import { DEMO_LABEL } from '../demo/generate';
+import { demoSource } from '../demo/media';
 import { devSource, filesSource, findParts, folderSource, type MediaSource } from './sources';
 import { loadRoots, permission, saveRoots } from './store';
 
@@ -18,6 +21,7 @@ interface MediaCtx {
   setFolders: (roots: FileSystemDirectoryHandle[]) => Promise<void>;
   setFiles: (files: File[]) => void;
   setDev: () => void;
+  setDemo: () => void;
 }
 
 const Ctx = createContext<MediaCtx | null>(null);
@@ -50,6 +54,13 @@ export function MediaProvider({ children }: { children: ReactNode }) {
     activate(folderSource(parts));
   }, [activate]);
 
+  // The demo's media is generated, whatever folder access was saved before.
+  const { state } = useData();
+  const isDemo = state.status === 'ready' && state.info.source === DEMO_LABEL;
+  useEffect(() => {
+    if (isDemo && source?.kind !== 'demo') activate(demoSource());
+  }, [isDemo, source, activate]);
+
   useEffect(() => {
     (async () => {
       const saved = await loadRoots();
@@ -70,6 +81,7 @@ export function MediaProvider({ children }: { children: ReactNode }) {
     setFolders,
     setFiles: (files) => activate(filesSource(files)),
     setDev: () => activate(devSource()),
+    setDemo: () => activate(demoSource()),
     reconnect: async () => {
       if (await permission(roots, true)) activate(folderSource(await findParts(roots)));
     },

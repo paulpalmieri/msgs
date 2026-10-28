@@ -11,7 +11,7 @@ import { lit } from '../db/duckdb';
 import { useQuery } from '../db/useQuery';
 import { fmtDate, fmtInt, fmtPct } from '../lib/format';
 import { tsLit } from '../lib/time';
-import { Panel, Stat } from '../ui/primitives';
+import { Panel, Segmented, Stat } from '../ui/primitives';
 import { MessagePreview } from '../media/MessagePreview';
 import { Badge } from '../ui/Badge';
 
@@ -129,6 +129,142 @@ function ReactionByPerson() {
           },
         }}
       />
+    </Panel>
+  );
+}
+
+/** Messages sent and reactions received per person (all types, not counting reacting to yourself). */
+function useReceived() {
+  const { filters } = useConversation();
+  return useQuery<{ s: string; n: number; got: number }>(`
+    WITH m AS (SELECT sender AS s, count(*) AS n FROM span GROUP BY 1),
+    r AS (SELECT receiver AS s, count(*) AS got FROM span_reactions WHERE actor <> receiver GROUP BY 1)
+    SELECT m.s, m.n, coalesce(r.got, 0) AS got FROM m LEFT JOIN r USING (s)
+    WHERE ${pairPeopleSql(filters, 'm.s', 'm.s')}`);
+}
+
+/** Everyone ranked by total reactions received, with their per-message rate. */
+function ReceivedTotals({ openPerson }: { openPerson: (name: string) => void }) {
+  const t = useChartTheme();
+  const { colorOf } = useConversation();
+  const q = useReceived();
+  const rows = [...(q.data ?? [])].sort((a, b) => b.got - a.got);
+  const ordered = [...rows].reverse();
+  const total = rows.reduce((a, r) => a + r.got, 0);
+  const option = useMemo(() => {
+    const base = baseOption(t);
+    return {
+      ...base,
+      grid: { ...base.grid, right: 104 },
+      tooltip: {
+        ...base.tooltip,
+        trigger: 'item',
+        formatter: (p: { dataIndex: number }) => {
+          const r = ordered[p.dataIndex];
+          return `<div style="font-weight:600;margin-bottom:4px">${esc(r.s)}</div>` +
+            tipRow(colorOf(r.s), fmtInt(r.got), `reactions received · ${fmtPct(r.got / Math.max(1, total), 1)} of all`) +
+            tipRow(t.ink2, (r.got / r.n).toFixed(2), `per message (${fmtInt(r.n)} messages)`);
+        },
+      },
+      xAxis: { type: 'value', ...base.axisCommon, axisLabel: { show: false }, splitLine: { show: false } },
+      yAxis: { type: 'category', data: ordered.map((r) => r.s), ...base.axisCommon, axisLine: { show: false }, axisLabel: { color: t.ink2, fontSize: 11, width: 120, overflow: 'truncate' } },
+      series: [{
+        type: 'bar',
+        barMaxWidth: 16,
+        data: ordered.map((r) => ({ value: r.got, itemStyle: { color: colorOf(r.s), borderRadius: [0, 3, 3, 0] } })),
+        label: {
+          show: true, position: 'right', color: t.ink2, fontSize: 11,
+          formatter: (p: { dataIndex: number }) => `${fmtInt(ordered[p.dataIndex].got)} · ${(ordered[p.dataIndex].got / ordered[p.dataIndex].n).toFixed(2)}/msg`,
+        },
+      }],
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q.data, t, colorOf]);
+  return (
+    <Panel title="Reactions received, by person" actions={<span className="text-[11px] text-ink-3">total · per message · click for profile</span>} bodyClassName="p-2">
+      <EChart option={option} height={Math.max(380, rows.length * 22 + 24)} dimmed={q.loading} on={{ click: (p: { dataIndex: number }) => openPerson(ordered[p.dataIndex].s) }} />
+    </Panel>
+  );
+}
+
+/**
+ * Who gets the most out of each message: messages sent against reactions
+ * received per message (all reaction types, not counting reacting to
+ * yourself). The dashed line is the group's average.
+ */
+function MessagesVsReactions({ openPerson }: { openPerson: (name: string) => void }) {
+  const t = useChartTheme();
+  const { colorOf } = useConversation();
+  const [min, setMin] = useState<'20' | '100' | '500'>('20');
+  const q = useReceived();
+  const all = q.data ?? [];
+  const rows = all.filter((r) => r.n >= Number(min));
+  const avg = all.reduce((a, r) => a + r.got, 0) / Math.max(1, all.reduce((a, r) => a + r.n, 0));
+  const option = useMemo(() => {
+    const base = baseOption(t);
+    const maxGot = Math.max(1, ...rows.map((r) => r.got));
+    // Name the 15 biggest senders and the 5 best ratios; everyone else is named on hover.
+    const named = new Set([
+      ...[...rows].sort((a, b) => b.n - a.n).slice(0, 15).map((r) => r.s),
+      ...[...rows].sort((a, b) => b.got / b.n - a.got / a.n).slice(0, 5).map((r) => r.s),
+    ]);
+    return {
+      ...base,
+      grid: { ...base.grid, left: 16, right: 40, top: 28, bottom: 28 },
+      tooltip: {
+        ...base.tooltip,
+        trigger: 'item',
+        formatter: (p: { dataIndex: number }) => {
+          const r = rows[p.dataIndex];
+          const ratio = r.got / r.n;
+          return `<div style="font-weight:600;margin-bottom:4px">${esc(r.s)}</div>` +
+            tipRow(colorOf(r.s), ratio.toFixed(2), 'reactions per message') +
+            tipRow(t.ink2, fmtInt(r.n), 'messages sent') +
+            tipRow(t.ink2, fmtInt(r.got), 'reactions received') +
+            tipRow(t.muted, `${(ratio / avg).toFixed(1)}×`, `the group average (${avg.toFixed(2)})`);
+        },
+      },
+      xAxis: {
+        type: 'log', logBase: 10, name: 'messages sent →', nameLocation: 'end', nameTextStyle: { color: t.muted, fontSize: 11 },
+        ...base.axisCommon, axisLabel: { ...base.axisCommon.axisLabel, formatter: (v: number) => fmtInt(v) },
+      },
+      yAxis: {
+        type: 'value', min: 0, name: 'reactions per message ↑', nameTextStyle: { color: t.muted, fontSize: 11, align: 'left' },
+        ...base.axisCommon, axisLine: { show: false },
+      },
+      series: [{
+        type: 'scatter',
+        data: rows.map((r) => ({
+          value: [r.n, r.got / r.n],
+          symbolSize: 9 + 26 * Math.sqrt(r.got / maxGot),
+          itemStyle: { color: colorOf(r.s), borderColor: t.surface, borderWidth: 2, opacity: 0.9 },
+          label: { show: named.has(r.s), position: 'right', color: t.ink2, fontSize: 11, formatter: r.s.split(' ')[0] },
+        })),
+        emphasis: { scale: 1.15 },
+        markLine: {
+          silent: true, symbol: 'none', lineStyle: { color: t.muted, type: 'dashed' },
+          label: { formatter: `group average ${avg.toFixed(2)}`, color: t.muted, fontSize: 10, position: 'insideEndTop' },
+          data: [{ yAxis: avg }],
+        },
+      }],
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q.data, min, t, colorOf]);
+  return (
+    <Panel
+      title="Messages sent vs reactions received per message"
+      actions={
+        <div className="flex items-center gap-3">
+          <span className="text-[11px] text-ink-3" title="All reaction types. Above the dashed line = more reactions per message than the group average. Dot size = total reactions received. Click a dot for the profile.">above the line = above average</span>
+          <span className="text-[11px] text-ink-3">min. messages</span>
+          <Segmented value={min} options={['20', '100', '500']} onChange={setMin} />
+        </div>
+      }
+      bodyClassName="p-2"
+    >
+      {/* Same height as the ranked list beside it, so the two panels line up. */}
+      <EChart option={option} height={Math.max(380, all.length * 22 + 24)} dimmed={q.loading} on={{ click: (p: { dataIndex: number }) => openPerson(rows[p.dataIndex].s) }} />
+      {!q.loading && !rows.length && <div className="p-3 text-ink-3">Nobody has {min}+ messages in this selection.</div>}
     </Panel>
   );
 }
@@ -265,6 +401,10 @@ export function Reactions({ openPerson }: { openPerson: (name: string) => void }
   return (
     <div className="space-y-3 p-4">
       <KpiRow />
+      <div className="grid grid-cols-1 gap-3 @5xl:grid-cols-[3fr_2fr]">
+        <MessagesVsReactions openPerson={openPerson} />
+        <ReceivedTotals openPerson={openPerson} />
+      </div>
       <div className="grid grid-cols-1 gap-3 @5xl:grid-cols-[2fr_3fr]">
         <TopReactions />
         <ReactionByPerson />
