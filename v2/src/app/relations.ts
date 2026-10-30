@@ -1,4 +1,4 @@
-// SQL building blocks for pairwise analysis, shared by People and Relations.
+// SQL building blocks for pairwise analysis, shared by People, Content and Wrapped.
 //
 // A reply is a message whose previous message (in the whole conversation,
 // in time order) came from someone else, within the reply window. Its

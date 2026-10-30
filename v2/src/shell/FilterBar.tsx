@@ -150,7 +150,6 @@ function KindsFilter() {
 /** Sections that read the filters differently say so next to them. */
 const SCOPE_NOTES: Partial<Record<Section, string>> = {
   people: 'Profiles use dates and types, not the people filter',
-  relations: 'People filter keeps exchanges involving them',
   reactions: 'People filter keeps reactions given or received by them',
   wrapped: 'Wrapped ignores these filters',
 };
