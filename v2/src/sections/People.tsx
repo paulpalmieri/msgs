@@ -4,19 +4,28 @@
 import { Search } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { useConversation } from '../app/ConversationProvider';
-import { repliesCte, replyPairWhere, TURNS_CTE } from '../app/relations';
+import { REPLY_WINDOWS, repliesCte, replyPairWhere, TURNS_CTE } from '../app/relations';
 import { EChart } from '../charts/EChart';
 import { baseOption, esc, legend, tipRow, useChartTheme } from '../charts/theme';
 import { lit } from '../db/duckdb';
 import { useQuery } from '../db/useQuery';
 import { fmtCompact, fmtDate, fmtInt, fmtPct } from '../lib/format';
 import { fmtDuration, hourLabel, MONTHS, tsLit } from '../lib/time';
-import { Panel, Stat } from '../ui/primitives';
-import { ReplyWindowControl } from './Relations';
+import { Panel, Segmented, Stat } from '../ui/primitives';
 import { MessagePreview } from '../media/MessagePreview';
 import { Badge } from '../ui/Badge';
 
 const MEDIA = "('photo','video','gif','sticker','audio','file')";
+
+function ReplyWindowControl() {
+  const { replyWindow, setReplyWindow } = useConversation();
+  return (
+    <div className="flex items-center gap-3">
+      <span className="text-ink-3">A message is a reply when it follows someone else’s within</span>
+      <Segmented value={String(replyWindow)} options={REPLY_WINDOWS as [string, string][]} onChange={(v) => setReplyWindow(Number(v))} />
+    </div>
+  );
+}
 
 // --- List ---------------------------------------------------------------------------
 

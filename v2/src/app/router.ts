@@ -2,7 +2,7 @@
 // Filters live in the URL so a view can be bookmarked or reloaded as-is.
 import { useCallback, useMemo, useSyncExternalStore } from 'react';
 
-export const SECTIONS = ['overview', 'activity', 'people', 'relations', 'reactions', 'content', 'media', 'messages', 'sql', 'wrapped'] as const;
+export const SECTIONS = ['overview', 'activity', 'people', 'reactions', 'content', 'media', 'messages', 'sql', 'wrapped'] as const;
 export type Section = (typeof SECTIONS)[number];
 
 export const KIND_GROUPS = {

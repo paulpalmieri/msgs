@@ -1,5 +1,5 @@
 import {
-  ArrowLeftRight, CalendarDays, ChevronLeft, Image, LayoutDashboard, MessagesSquare, Network, Smile, Sparkles, Terminal, Type, Users,
+  ArrowLeftRight, CalendarDays, ChevronLeft, Image, LayoutDashboard, MessagesSquare, Smile, Sparkles, Terminal, Type, Users,
   type LucideIcon,
 } from 'lucide-react';
 import { useState } from 'react';
@@ -15,7 +15,6 @@ export const NAV: { id: Section; label: string; icon: LucideIcon; ready?: boolea
   { id: 'overview', label: 'Overview', icon: LayoutDashboard, ready: true },
   { id: 'activity', label: 'Activity', icon: CalendarDays, ready: true },
   { id: 'people', label: 'People', icon: Users, ready: true },
-  { id: 'relations', label: 'Relations', icon: Network, ready: true },
   { id: 'reactions', label: 'Reactions', icon: Smile, ready: true },
   { id: 'content', label: 'Content', icon: Type, ready: true },
   { id: 'media', label: 'Media', icon: Image, ready: true },

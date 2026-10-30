@@ -9,7 +9,6 @@ import { Messages } from '../sections/Messages';
 import { Overview } from '../sections/Overview';
 import { People } from '../sections/People';
 import { Reactions } from '../sections/Reactions';
-import { Relations } from '../sections/Relations';
 import { Soon } from '../sections/Soon';
 import { SqlSection } from '../sections/SqlSection';
 import { Wrapped } from '../sections/Wrapped';
@@ -25,7 +24,6 @@ function SectionView({ section, label, who, at, openPerson }: { section: Section
     case 'overview': return <Overview openPerson={openPerson} />;
     case 'activity': return <Activity />;
     case 'people': return <People who={who} setWho={openPerson} />;
-    case 'relations': return <Relations openPerson={openPerson} />;
     case 'reactions': return <Reactions openPerson={openPerson} />;
     case 'content': return <Content />;
     case 'media': return <Media />;
